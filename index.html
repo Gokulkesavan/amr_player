@@ -1,0 +1,501 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>PCAP RTP → Audio</title>
+<style>
+  body { font-family: system-ui, sans-serif; max-width: 920px; margin: 20px auto; padding: 0 16px; }
+  h1 { font-size: 22px; }
+  .stream { border: 1px solid #ccc; padding: 10px; margin: 8px 0; border-radius: 6px; }
+  .stream.selected { border-color: #06f; background: #f0f7ff; }
+  .stream label { cursor: pointer; display: block; }
+  .mono { font-family: ui-monospace, monospace; font-size: 13px; }
+  button { padding: 8px 16px; font-size: 14px; cursor: pointer; }
+  button:disabled { opacity: 0.5; cursor: default; }
+  #status { margin: 10px 0; color: #555; min-height: 20px; }
+  audio { width: 100%; margin-top: 8px; }
+  .controls { margin: 12px 0; padding: 12px; background: #f5f5f5; border-radius: 6px; }
+  .controls label { margin-right: 16px; }
+  .result { margin: 12px 0; padding: 10px; border: 1px solid #ddd; border-radius: 6px; }
+  a { color: #06f; }
+</style>
+</head>
+<body>
+<h1>PCAP → RTP → Playable Audio</h1>
+<p>Upload a pcap/pcapng containing AMR or AMR-WB RTP streams. Everything runs locally in your browser.</p>
+
+<input type="file" id="fileInput" accept=".pcap,.pcapng,.cap">
+<div id="status"></div>
+<div id="streams"></div>
+<div id="controls" class="controls" style="display:none">
+  <label>Codec:
+    <select id="codec">
+      <option value="auto">Auto-detect</option>
+      <option value="nb">AMR-NB (8 kHz)</option>
+      <option value="wb">AMR-WB (16 kHz)</option>
+    </select>
+  </label>
+  <label><input type="checkbox" id="octetAlign" checked> Octet-aligned (octet-align=1)</label>
+  <label>Output:
+    <select id="outFormat">
+      <option value="wav">WAV</option>
+      <option value="mp3">MP3</option>
+    </select>
+  </label>
+  <button id="convertBtn">Convert selected streams</button>
+</div>
+<div id="results"></div>
+
+<script src="./ffmpeg/ffmpeg.js"></script>
+<script>
+(async () => {
+if (document.readyState === 'loading') {
+  await new Promise(r => document.addEventListener('DOMContentLoaded', r, { once: true }));
+}
+const { FFmpeg } = FFmpegWASM;
+
+// ---------- AMR frame size tables (bits) ----------
+const NB_BITS = [95,103,118,134,148,159,204,244,39,0,0,0,0,0,0,0];
+const WB_BITS = [132,177,253,285,317,365,397,461,477,40,0,0,0,0,0,0];
+
+// ---------- PCAP / PCAPNG parser ----------
+function parsePcap(buf) {
+  const dv = new DataView(buf);
+  const magic = dv.getUint32(0, false);
+  if (magic === 0x0a0d0d0a) return parsePcapng(buf);
+  let le;
+  if (magic === 0xa1b2c3d4) le = false;
+  else if (magic === 0xd4c3b2a1) le = true;
+  else throw new Error('Not a pcap/pcapng file');
+  const linkType = dv.getUint32(20, le);
+  const packets = [];
+  let off = 24;
+  while (off + 16 <= buf.byteLength) {
+    const inclLen = dv.getUint32(off + 8, le);
+    off += 16;
+    if (off + inclLen > buf.byteLength) break;
+    packets.push({ linkType, data: new Uint8Array(buf, off, inclLen) });
+    off += inclLen;
+  }
+  return packets;
+}
+
+function parsePcapng(buf) {
+  const dv = new DataView(buf);
+  const packets = [];
+  let linkType = 1;
+  let off = 0;
+  while (off + 12 <= buf.byteLength) {
+    const type = dv.getUint32(off, true);
+    const len = dv.getUint32(off + 4, true);
+    if (len < 12 || off + len > buf.byteLength) break;
+    if (type === 1) {
+      linkType = dv.getUint16(off + 8, true);
+    } else if (type === 6) {
+      const capLen = dv.getUint32(off + 20, true);
+      if (off + 28 + capLen <= buf.byteLength) {
+        packets.push({ linkType, data: new Uint8Array(buf, off + 28, capLen) });
+      }
+    } else if (type === 3) {
+      const origLen = dv.getUint32(off + 8, true);
+      const capLen = Math.min(origLen, len - 16);
+      packets.push({ linkType, data: new Uint8Array(buf, off + 12, capLen) });
+    }
+    off += len;
+  }
+  return packets;
+}
+
+// ---------- UDP / RTP ----------
+// ---------- IPv4 / IPv6 helpers ----------
+function ipv4ToString(d, off) {
+  return `${d[off]}.${d[off+1]}.${d[off+2]}.${d[off+3]}`;
+}
+
+function ipv6ToString(d, off) {
+  const seg = [];
+  for (let i = 0; i < 8; i++) {
+    seg.push(((d[off + i*2] << 8) | d[off + i*2 + 1]).toString(16));
+  }
+  // compress longest run of zeros
+  let best = { start: -1, len: 0 }, cur = { start: -1, len: 0 };
+  for (let i = 0; i < 8; i++) {
+    if (seg[i] === '0') {
+      if (cur.start === -1) cur.start = i;
+      cur.len++;
+      if (cur.len > best.len) best = { ...cur };
+    } else {
+      cur = { start: -1, len: 0 };
+    }
+  }
+  let out;
+  if (best.len > 1) {
+    const left  = seg.slice(0, best.start).join(':');
+    const right = seg.slice(best.start + best.len).join(':');
+    out = left + '::' + right;
+  } else {
+    out = seg.join(':');
+  }
+  return out.replace(/^::$/, '::');
+}
+
+// Parse IPv6 extension headers to find the UDP next-header offset.
+// Returns { nextHeader, udpOff } or null.
+function walkIpv6Extensions(d, startOff, firstNext) {
+  let next = firstNext;
+  let off = startOff;
+  // Extension header types that are NOT UDP/TCP/final
+  // 0 = HOPOPT, 43 = Routing, 44 = Fragment, 60 = Dest Options
+  while (next === 0 || next === 43 || next === 44 || next === 60) {
+    if (off + 8 > d.length) return null;
+    let hdrLen;
+    if (next === 44) {
+      // Fragment header is always 8 bytes
+      hdrLen = 8;
+    } else {
+      // (Hdr Ext Len + 1) * 8
+      hdrLen = (d[off + 1] + 1) * 8;
+    }
+    next = d[off];
+    off += hdrLen;
+    if (off > d.length) return null;
+  }
+  return { nextHeader: next, udpOff: off };
+}
+
+function extractUdp(pkt) {
+  const { linkType, data } = pkt;
+  let ipOff;
+
+  // --- find IP header start ---
+  if (linkType === 1) {                       // Ethernet
+    if (data.length < 14) return null;
+    let ethertype = (data[12] << 8) | data[13];
+    let off = 14;
+    while (ethertype === 0x8100 || ethertype === 0x88a8) {  // VLAN tags
+      if (data.length < off + 4) return null;
+      ethertype = (data[off + 2] << 8) | data[off + 3];
+      off += 4;
+    }
+    if (ethertype === 0x0800 || ethertype === 0x86dd) ipOff = off;
+    else return null;
+  } else if (linkType === 101 || linkType === 228 || linkType === 12) {
+    // RAW IP (101), LINKTYPE_IPV4 (228), LINKTYPE_RAW (12 - could be v4 or v6)
+    ipOff = 0;
+  } else if (linkType === 113) {              // Linux SLL
+    if (data.length < 16) return null;
+    const proto = (data[14] << 8) | data[15];
+    if (proto !== 0x0800 && proto !== 0x86dd) return null;
+    ipOff = 16;
+  } else if (linkType === 276) {              // Linux SLL2
+    if (data.length < 20) return null;
+    const proto = (data[0] << 8) | data[1];
+    if (proto !== 0x0800 && proto !== 0x86dd) return null;
+    ipOff = 20;
+  } else if (linkType === 0) {                // NULL / loopback
+    ipOff = 4;
+  } else {
+    return null;
+  }
+
+  if (data.length < ipOff + 1) return null;
+  const version = data[ipOff] >> 4;
+
+  let src, dst, udpOff;
+
+  if (version === 4) {
+    if (data.length < ipOff + 20) return null;
+    const ihl = (data[ipOff] & 0x0f) * 4;
+    if (data[ipOff + 9] !== 17) return null;   // not UDP
+    src = ipv4ToString(data, ipOff + 12);
+    dst = ipv4ToString(data, ipOff + 16);
+    udpOff = ipOff + ihl;
+  } else if (version === 6) {
+    if (data.length < ipOff + 40) return null;
+    const firstNext = data[ipOff + 6];
+    src = ipv6ToString(data, ipOff + 8);
+    dst = ipv6ToString(data, ipOff + 24);
+    const walked = walkIpv6Extensions(data, ipOff + 40, firstNext);
+    if (!walked) return null;
+    if (walked.nextHeader !== 17) return null;  // not UDP
+    udpOff = walked.udpOff;
+  } else {
+    return null;
+  }
+
+  if (data.length < udpOff + 8) return null;
+  const sport = (data[udpOff]     << 8) | data[udpOff + 1];
+  const dport = (data[udpOff + 2] << 8) | data[udpOff + 3];
+  // UDP length field: for IPv6 jumbograms it can be 0; fall back to "rest of packet"
+  const ulen = (data[udpOff + 4] << 8) | data[udpOff + 5];
+  const start = udpOff + 8;
+  let end = ulen >= 8 ? Math.min(start + (ulen - 8), data.length) : data.length;
+  if (end <= start) return null;
+
+  return { src, dst, sport, dport, payload: data.slice(start, end) };
+}
+
+function parseRtp(p) {
+  if (p.length < 12 || (p[0] >> 6) !== 2) return null;
+  const cc = p[0] & 0x0f;
+  const hasExt = (p[0] >> 4) & 1;
+  const hasPad = (p[0] >> 5) & 1;
+  const pt = p[1] & 0x7f;
+  const seq = (p[2] << 8) | p[3];
+  const ts = ((p[4] << 24) | (p[5] << 16) | (p[6] << 8) | p[7]) >>> 0;
+  const ssrc = ((p[8] << 24) | (p[9] << 16) | (p[10] << 8) | p[11]) >>> 0;
+  let hdr = 12 + cc * 4;
+  if (hasExt) {
+    if (p.length < hdr + 4) return null;
+    const extWords = (p[hdr + 2] << 8) | p[hdr + 3];
+    hdr += 4 + extWords * 4;
+  }
+  if (hdr > p.length) return null;
+  let end = p.length;
+  if (hasPad) end -= p[p.length - 1];
+  if (end <= hdr) return null;
+  return { pt, seq, ts, ssrc, payload: p.slice(hdr, end) };
+}
+
+// ---------- AMR rebuild ----------
+function bitsToBytes(bits) {
+  const out = new Uint8Array(Math.ceil(bits.length / 8));
+  for (let i = 0; i < bits.length; i++) if (bits[i]) out[i >> 3] |= 1 << (7 - (i & 7));
+  return out;
+}
+
+function buildAmr(packets, wb, octetAlign) {
+  const bitsTable = wb ? WB_BITS : NB_BITS;
+  packets.sort((a, b) => a.seq - b.seq);
+  const chunks = [new TextEncoder().encode(wb ? '#!AMR-WB\n' : '#!AMR\n')];
+
+  for (const pkt of packets) {
+    const p = pkt.payload;
+    if (p.length < 2) continue;
+    // p[0] = CMR, then TOC list
+    let i = 1;
+    const tocs = [];
+    while (i < p.length) {
+      const toc = p[i];
+      const f = (toc >> 7) & 1;
+      const ft = (toc >> 3) & 0x0f;
+      tocs.push({ toc, ft });
+      i++;
+      if (f === 0) break;
+    }
+
+    if (octetAlign) {
+      let off = i;
+      for (const { toc, ft } of tocs) {
+        const nbits = bitsTable[ft] || 0;
+        if (!nbits) continue;
+        const nbytes = (nbits + 7) >> 3;
+        if (off + nbytes > p.length) break;
+        chunks.push(new Uint8Array([toc & 0x7f]));
+        chunks.push(p.slice(off, off + nbytes));
+        off += nbytes;
+      }
+    } else {
+      const speech = p.slice(i);
+      let bitOff = 0;
+      for (const { toc, ft } of tocs) {
+        const nbits = bitsTable[ft] || 0;
+        if (!nbits) continue;
+        const bits = [];
+        for (let k = 0; k < nbits; k++) {
+          const bp = bitOff + k;
+          const byte = speech[bp >> 3];
+          bits.push(byte === undefined ? 0 : (byte >> (7 - (bp & 7))) & 1);
+        }
+        bitOff += nbits;
+        chunks.push(new Uint8Array([toc & 0x7f]));
+        chunks.push(bitsToBytes(bits));
+      }
+    }
+  }
+
+  let total = 0;
+  for (const c of chunks) total += c.length;
+  const out = new Uint8Array(total);
+  let off = 0;
+  for (const c of chunks) { out.set(c, off); off += c.length; }
+  return out;
+}
+
+// ---------- ffmpeg.wasm (lazy singleton) ----------
+let ffmpegInstance = null;
+async function getFfmpeg(onLog) {
+  if (ffmpegInstance) return ffmpegInstance;
+  const ff = new FFmpeg();
+  if (onLog) ff.on('log', ({ message }) => onLog(message));
+  const base = new URL('./ffmpeg/', document.baseURI).href;
+await ff.load({
+  coreURL: base + 'ffmpeg-core.js',
+  wasmURL: base + 'ffmpeg-core.wasm',
+});
+  ffmpegInstance = ff;
+  return ff;
+}
+
+// ---------- UI ----------
+let parsedStreams = [];
+let selected = new Set();
+let pcapHadWb = false;
+
+const fileInput = document.getElementById('fileInput');
+const statusEl = document.getElementById('status');
+const streamsEl = document.getElementById('streams');
+const controlsEl = document.getElementById('controls');
+const resultsEl = document.getElementById('results');
+const convertBtn = document.getElementById('convertBtn');
+
+function byteContains(hay, needle) {
+  outer: for (let i = 0; i <= hay.length - needle.length; i++) {
+    for (let j = 0; j < needle.length; j++) if (hay[i + j] !== needle[j]) continue outer;
+    return true;
+  }
+  return false;
+}
+
+fileInput.addEventListener('change', async (e) => {
+  const file = e.target.files[0];
+  if (!file) return;
+  resultsEl.innerHTML = '';
+  streamsEl.innerHTML = '';
+  controlsEl.style.display = 'none';
+  statusEl.textContent = 'Reading file...';
+
+  const buf = await file.arrayBuffer();
+  const bytes = new Uint8Array(buf);
+  pcapHadWb = byteContains(bytes, new TextEncoder().encode('AMR-WB'));
+
+  statusEl.textContent = 'Parsing pcap...';
+  let packets;
+  try { packets = parsePcap(buf); }
+  catch (err) { statusEl.textContent = 'Error: ' + err.message; return; }
+
+  statusEl.textContent = `Parsed ${packets.length} packets. Looking for RTP streams...`;
+
+  const streams = new Map();
+  for (const pkt of packets) {
+    const udp = extractUdp(pkt);
+    if (!udp) continue;
+    const rtp = parseRtp(udp.payload);
+    if (!rtp) continue;
+    if (!streams.has(rtp.ssrc)) {
+      streams.set(rtp.ssrc, {
+        ssrc: rtp.ssrc, pt: rtp.pt,
+        src: udp.src, dst: udp.dst, sport: udp.sport, dport: udp.dport,
+        packets: [],
+      });
+    }
+    streams.get(rtp.ssrc).packets.push(rtp);
+  }
+
+  if (streams.size === 0) {
+    statusEl.textContent = 'No RTP streams found. (SRTP or truncated payloads won\'t work.)';
+    return;
+  }
+
+  parsedStreams = [...streams.values()].sort((a, b) => b.packets.length - a.packets.length);
+  selected.clear();
+  statusEl.textContent = `Found ${parsedStreams.length} RTP stream(s). Select up to 2 to convert.`;
+  renderStreams();
+  controlsEl.style.display = 'block';
+});
+
+function renderStreams() {
+  streamsEl.innerHTML = '';
+  for (const s of parsedStreams) {
+    const div = document.createElement('div');
+    div.className = 'stream' + (selected.has(s.ssrc) ? ' selected' : '');
+    const totalBytes = s.packets.reduce((sum, p) => sum + p.payload.length, 0);
+    const avg = (totalBytes / s.packets.length).toFixed(1);
+    div.innerHTML = `
+      <label>
+        <input type="checkbox" ${selected.has(s.ssrc) ? 'checked' : ''}>
+        <span class="mono">
+          SSRC ${s.ssrc.toString(16).padStart(8, '0')} · PT ${s.pt} ·
+          ${s.src}:${s.sport} → ${s.dst}:${s.dport} ·
+          ${s.packets.length} pkts · avg ${avg} B
+        </span>
+      </label>`;
+    const cb = div.querySelector('input');
+    cb.addEventListener('change', () => {
+      if (cb.checked) {
+        if (selected.size >= 2) { cb.checked = false; return; }
+        selected.add(s.ssrc);
+      } else selected.delete(s.ssrc);
+      renderStreams();
+    });
+    streamsEl.appendChild(div);
+  }
+}
+
+convertBtn.addEventListener('click', async () => {
+  if (selected.size === 0) return;
+  convertBtn.disabled = true;
+  resultsEl.innerHTML = '';
+  statusEl.textContent = 'Loading ffmpeg (first time only, ~30 MB)...';
+
+  try {
+    const ffmpeg = await getFfmpeg();
+
+    let codecChoice = document.getElementById('codec').value;
+    const octetAlign = document.getElementById('octetAlign').checked;
+    const outFormat = document.getElementById('outFormat').value;
+
+    for (const s of parsedStreams) {
+      if (!selected.has(s.ssrc)) continue;
+
+      const avg = s.packets.reduce((sum, p) => sum + p.payload.length, 0) / s.packets.length;
+      const wb = codecChoice === 'wb' || (codecChoice === 'auto' && (pcapHadWb || avg > 35));
+
+      statusEl.textContent = `Building AMR for SSRC ${s.ssrc.toString(16)}...`;
+
+      const amr = buildAmr(s.packets, wb, octetAlign);
+      const inName = wb ? 'in.awb' : 'in.amr';
+      const outName = 'out.' + outFormat;
+
+      await ffmpeg.writeFile(inName, amr);
+      const args = ['-i', inName];
+      if (outFormat === 'mp3') args.push('-b:a', '64k');
+      args.push(outName);
+      await ffmpeg.exec(args);
+      const data = await ffmpeg.readFile(outName);
+
+      const blob = new Blob([data.buffer], { type: outFormat === 'wav' ? 'audio/wav' : 'audio/mpeg' });
+      const url = URL.createObjectURL(blob);
+
+      const rawBlob = new Blob([amr], { type: 'audio/amr' });
+      const rawUrl = URL.createObjectURL(rawBlob);
+
+      const div = document.createElement('div');
+      div.className = 'result';
+      div.innerHTML = `
+        <div class="mono">SSRC ${s.ssrc.toString(16).padStart(8, '0')} ·
+          ${s.src}:${s.sport} → ${s.dst}:${s.dport} · ${wb ? 'AMR-WB' : 'AMR-NB'} · ${octetAlign ? 'octet' : 'BW-eff'}</div>
+        <audio controls src="${url}"></audio>
+        <div>
+          <a href="${url}" download="ssrc_${s.ssrc.toString(16)}.${outFormat}">Download ${outFormat.toUpperCase()}</a>
+          &nbsp;|&nbsp;
+          <a href="${rawUrl}" download="ssrc_${s.ssrc.toString(16)}.${wb ? 'awb' : 'amr'}">Download raw ${wb ? '.awb' : '.amr'}</a>
+        </div>`;
+      resultsEl.appendChild(div);
+
+      await ffmpeg.deleteFile(inName);
+      await ffmpeg.deleteFile(outName);
+    }
+
+    statusEl.textContent = 'Done.';
+  } catch (err) {
+    console.error(err);
+    statusEl.textContent = 'Error: ' + err.message;
+  } finally {
+    convertBtn.disabled = false;
+  }
+});
+})();
+</script>
+</body>
+</html>
