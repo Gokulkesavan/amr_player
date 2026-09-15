@@ -1,7 +1,6 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<script src="coi-serviceworker.js"></script>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>AMR / AMR-WB Extractor</title>
@@ -1299,18 +1298,28 @@ function render(fileName){
   $('#app').hidden = false;
   $('#fileName').textContent = fileName;
 
+  // Only AMR streams reach the UI.
+  const amrStreams = state.streams.filter(g => {
+    const cls = state.classifications.get(g.key);
+    return cls && cls.isAMR;
+  });
   const rtpN = state.streams.length;
-  const amrN = [...state.classifications.values()].filter(c => c.isAMR).length;
-  const dtmfN = [...state.classifications.values()].filter(c => c.isDTMF).length;
+  const amrN = amrStreams.length;
 
   let html = '';
 
   html += `<div class="summary">
-    <div class="stat"><div class="l">Frames</div><div class="v">${state.packets.length}</div></div>
-    <div class="stat"><div class="l">RTP streams</div><div class="v">${rtpN}</div></div>
+    <div class="stat"><div class="l">RTP streams detected</div><div class="v">${rtpN}</div></div>
     <div class="stat"><div class="l">AMR streams</div><div class="v">${amrN}</div></div>
-    <div class="stat"><div class="l">DTMF streams</div><div class="v">${dtmfN}</div></div>
   </div>`;
+
+  if (amrN === 0){
+    html += `<div class="warnbox">
+      <b>No AMR / AMR-WB RTP streams were found in this capture.</b>
+      Only AMR-NB and AMR-WB payload types are shown here; other codecs
+      (G.711, DTMF, etc.) are ignored by design.
+    </div>`;
+  }
 
   if (!state.sdpMedia.length && amrN > 0){
     html += `<div class="warnbox">
@@ -1320,12 +1329,13 @@ function render(fileName){
     </div>`;
   }
 
-  html += `<section><h2>RTP Streams <span class="badge">${state.streams.length}</span></h2>`;
-  if (!state.streams.length){
-    html += `<div class="card"><div class="hint">No RTP streams found.</div></div>`;
+  html += `<section><h2>AMR Streams <span class="badge">${amrN}</span></h2>`;
+
+  if (amrN === 0){
+    html += `<div class="card"><div class="hint">Nothing to extract.</div></div>`;
   } else {
     let idx = 0;
-    for (const g of state.streams){
+    for (const g of amrStreams){
       idx++;
       const cls = state.classifications.get(g.key);
       html += renderStreamCard(g, cls, idx);
@@ -1335,44 +1345,35 @@ function render(fileName){
 
   $('#content').innerHTML = html;
 
+  // Wire up buttons — index must match the loop above.
   let i = 0;
-  for (const g of state.streams){
+  for (const g of amrStreams){
     i++;
     const cls = state.classifications.get(g.key);
     const btn = document.getElementById('extract-' + i);
-    if (btn && cls.isAMR){
-      btn.onclick = () => extractAMR(g, cls, i);
-    }
+    if (btn) btn.onclick = () => extractAMR(g, cls, i);
     const conv = document.getElementById('convert-' + i);
-    if (conv && cls.isAMR){
-      conv.onclick = () => convertToWav(g, cls, i);
-    }
-    const peek = document.getElementById('peek-' + i);
-    if (peek){
-      peek.onclick = () => {
-        const el = document.getElementById('peekbody-' + i);
-        el.hidden = !el.hidden;
-        peek.textContent = el.hidden ? 'Show first 3 payloads' : 'Hide payloads';
-      };
-    }
+    if (conv) conv.onclick = () => convertToWav(g, cls, i);
   }
 }
 
 function renderStreamCard(g, cls, i){
-  const ext = cls.isAMR ? (cls.isWB ? 'awb' : 'amr') : '';
+  const ext = cls.isWB ? 'awb' : 'amr';
+
   const sdpLine = g.sdpMatch
     ? `<span class="tag ok">SDP: PT ${g.sdpMatch.codec.pt} ${esc(g.sdpMatch.codec.name)}</span>`
     : (state.sdpMedia.length
         ? '<span class="tag err">no SDP match</span>'
         : '<span class="tag warn">SDP absent</span>');
 
-  const srcTag = cls.isAMR
-    ? (cls.source === 'SDP'
-        ? '<span class="tag info">mode from SDP</span>'
-        : '<span class="tag warn">mode inferred</span>')
-    : '';
+  const srcTag = cls.source === 'SDP'
+    ? '<span class="tag info">mode from SDP</span>'
+    : '<span class="tag warn">mode inferred</span>';
 
-  let html = `<div class="card">
+  const ft = countFrameTypes(g, cls);
+  const sidLabel = cls.isWB ? 'SID / comfort noise (FT 9)' : 'SID / comfort noise (FT 8)';
+
+  return `<div class="card">
     <h3>Stream ${i}
       <span class="tag">SSRC 0x${g.ssrc.toString(16).padStart(8, '0')}</span>
       <span class="tag">PT ${g.pt}</span>
@@ -1381,20 +1382,14 @@ function renderStreamCard(g, cls, i){
     </h3>
     <dl class="kv">
       <dt>Endpoints</dt><dd>${esc(g.src)}:${g.sport} → ${esc(g.dst)}:${g.dport}</dd>
-      <dt>Codec</dt><dd>${esc(cls.codec || 'unknown')}</dd>
-      ${cls.isAMR ? `
-        <dt>Clock</dt><dd>${cls.clock} Hz</dd>
-        <dt>Frame size</dt><dd>${cls.frameSamples} samples (${(cls.frameSamples / cls.clock * 1000).toFixed(1)} ms)</dd>
-        <dt>Media duration</dt><dd style="color:#a3e6b8">${fmtDur(cls.mediaDuration)}</dd>
-        <dt>Lost packets</dt><dd>${g.lost} (${g.lossPct.toFixed(2)}%)</dd>
-      ` : ''}
-    </dl>`;
+      <dt>Codec</dt><dd>${esc(cls.codec)}</dd>
+      <dt>Clock</dt><dd>${cls.clock} Hz</dd>
+      <dt>Frame size</dt><dd>${cls.frameSamples} samples (${(cls.frameSamples / cls.clock * 1000).toFixed(1)} ms)</dd>
+      <dt>Media duration</dt><dd style="color:#a3e6b8">${fmtDur(cls.mediaDuration)}</dd>
+      <dt>Lost packets</dt><dd>${g.lost} (${g.lossPct.toFixed(2)}%)</dd>
+    </dl>
 
-  if (cls.isAMR){
-    const ft = countFrameTypes(g, cls);
-    const sidLabel = cls.isWB ? 'SID / comfort noise (FT 9)' : 'SID / comfort noise (FT 8)';
-
-    html += `<div class="grid2" style="margin-top:12px">
+    <div class="grid2" style="margin-top:12px">
       <div class="panelbox">
         <h4>Mode &amp; Alignment</h4>
         <div class="frow"><span class="k">Codec</span>
@@ -1425,40 +1420,19 @@ function renderStreamCard(g, cls, i){
         <div class="frow"><span class="k">Total frames</span>
           <span class="v">${ft.total}</span></div>
       </div>
-    </div>`;
+    </div>
 
-    html += `<div style="margin-top:10px;font-size:12px;color:var(--muted)">
+    <div style="margin-top:10px;font-size:12px;color:var(--muted)">
       <b style="color:var(--text)">Mode evidence:</b><br>
       ${cls.evidence.map(e => '· ' + esc(e)).join('<br>')}
-    </div>`;
+    </div>
 
-    html += `<div class="actions">
+    <div class="actions">
       <button class="btn ok" id="extract-${i}">Download stream-${i}.${ext}</button>
       <button class="btn primary" id="convert-${i}">Convert to WAV (ffmpeg.wasm)</button>
-      <button class="btn" id="peek-${i}">Show first 3 payloads</button>
     </div>
-    <div id="peekbody-${i}" hidden style="margin-top:10px">
-      ${g.packets.slice(0, 3).map((p, k) => `
-        <div style="margin-bottom:8px">
-          <div style="color:var(--muted);font-size:11px;margin-bottom:3px">
-            Packet #${p.no} · seq ${p.rtp.seq} · ts ${p.rtp.ts} · ${p.rtp.payload.length} payload bytes
-          </div>
-          <div class="bytes">${esc(hexLines(p.rtp.payload))}</div>
-        </div>`).join('')}
-    </div>
-    <div id="report-${i}" style="margin-top:10px;font-size:12px"></div>`;
-  } else if (cls.isDTMF){
-    html += `<div class="infobox" style="margin-top:10px">
-      DTMF stream (RFC 4733 telephone-event). Not an AMR audio stream — no extraction.
-    </div>`;
-  } else {
-    html += `<div class="infobox" style="margin-top:10px">
-      Non-AMR codec. No extraction available.
-    </div>`;
-  }
-
-  html += `</div>`;
-  return html;
+    <div id="report-${i}" style="margin-top:10px;font-size:12px"></div>
+  </div>`;
 }
 
 function hexLines(bytes){
