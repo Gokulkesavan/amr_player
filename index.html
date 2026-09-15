@@ -1198,33 +1198,46 @@ function countFrameTypes(g, cls){
    ffmpeg.wasm  (fixed: single declaration)
    ===================================================================== */
 let ffmpegPromise = null;
+let ffmpegPromise = null;
 function getFFmpeg(){
   if (ffmpegPromise) return ffmpegPromise;
   ffmpegPromise = (async () => {
+    if (typeof FFmpegWASM === 'undefined' || typeof FFmpegWASM.FFmpeg !== 'function')
+      throw new Error('@ffmpeg/ffmpeg failed to load from CDN (FFmpegWASM.FFmpeg missing)');
+    if (typeof FFmpegUtil === 'undefined' || typeof FFmpegUtil.toBlobURL !== 'function')
+      throw new Error('@ffmpeg/util failed to load from CDN (FFmpegUtil.toBlobURL missing)');
+
     const { FFmpeg } = FFmpegWASM;
     const { toBlobURL } = FFmpegUtil;
 
+    const ffmpegVersion = '0.12.10';
+    const coreVersion   = '0.12.6';
+
+    // Browsers refuse `new Worker(crossOriginUrl)`.  So we build a tiny
+    // same-origin ES-module wrapper that dynamically imports the real
+    // worker chunk from the CDN.  FFmpeg constructs its worker with
+    // { type: 'module' }, so the wrapper must be valid ESM — which it is.
+    const workerURL = `https://unpkg.com/@ffmpeg/ffmpeg@${ffmpegVersion}/dist/umd/814.ffmpeg.js`;
+    const wrapperCode = `await import(${JSON.stringify(workerURL)});`;
+    const wrapperBlob = new Blob([wrapperCode], { type: 'text/javascript' });
+    const classWorkerURL = URL.createObjectURL(wrapperBlob);
+
+    const coreBase = `https://unpkg.com/@ffmpeg/core@${coreVersion}/dist/umd`;
+
+    let coreURL, wasmURL;
+    try {
+      coreURL = await toBlobURL(`${coreBase}/ffmpeg-core.js`,   'text/javascript');
+      wasmURL = await toBlobURL(`${coreBase}/ffmpeg-core.wasm`, 'application/wasm');
+    } catch (e) {
+      throw new Error('Failed to fetch ffmpeg core from unpkg: ' + (e && e.message ? e.message : e));
+    }
+
     const ff = new FFmpeg();
-
-    const coreBase   = 'https://unpkg.com/@ffmpeg/core@0.12.6/dist/umd';
-    const ffmpegBase = 'https://unpkg.com/@ffmpeg/ffmpeg@0.12.10/dist/umd';
-
-    // The UMD build spawns its class worker from a sibling chunk.  A Worker
-    // cannot be constructed from a cross-origin URL, so fetch the chunk and
-    // pass it in as a same-origin blob: URL via classWorkerURL.
-    const classWorkerURL = await toBlobURL(
-      `${ffmpegBase}/814.ffmpeg.js`,
-      'text/javascript'
-    );
-
-    await ff.load({
-      coreURL: await toBlobURL(`${coreBase}/ffmpeg-core.js`,   'text/javascript'),
-      wasmURL: await toBlobURL(`${coreBase}/ffmpeg-core.wasm`, 'application/wasm'),
-      classWorkerURL
-    });
-
+    await ff.load({ coreURL, wasmURL, classWorkerURL });
     return ff;
   })();
+  // Allow retry on next call if it failed.
+  ffmpegPromise.catch(() => { ffmpegPromise = null; });
   return ffmpegPromise;
 }
 
@@ -1510,15 +1523,21 @@ function extractAMR(g, cls, idx){
 }
 
 /* ---- Convert to WAV using ffmpeg.wasm ---- */
+/* ---- Convert to WAV using ffmpeg.wasm ---- */
 async function convertToWav(g, cls, idx){
   const rep = document.getElementById('report-' + idx);
   const btn = document.getElementById('convert-' + idx);
   if (btn) btn.disabled = true;
 
+  // Build a stable status element + log element once, so nothing we do
+  // later (innerHTML on rep.firstElementChild) can wipe them.
+  rep.innerHTML = '';
+  const status = document.createElement('div');
+  status.className = 'infobox';
+  status.textContent = 'Loading ffmpeg.wasm (first run downloads ~30 MB)…';
   const logBox = document.createElement('div');
   logBox.className = 'fflog';
-  logBox.textContent = '';
-  rep.innerHTML = '<div class="infobox">Loading ffmpeg.wasm (first run downloads ~30 MB)…</div>';
+  rep.appendChild(status);
   rep.appendChild(logBox);
 
   const appendLog = m => {
@@ -1535,13 +1554,15 @@ async function convertToWav(g, cls, idx){
     const outName = 'out.wav';
 
     /* build the AMR/WB blob (SID → NO_DATA substitution keeps ffmpeg happy) */
-    rep.firstElementChild.textContent = 'Building AMR file…';
+    status.textContent = 'Building AMR file…';
     const built = buildAMRFile(g.packets, cls.isWB, cls.octetAlign,
                                cls.frameSamples, { replaceSid: true });
 
     await ff.writeFile(inName, built.bytes);
 
-    rep.firstElementChild.textContent = 'Decoding with ffmpeg.wasm…';
+    status.textContent = 'Decoding with ffmpeg.wasm…';
+    // Register the log listener once per conversion.  Using { once:false }
+    // here is fine — ffmpeg re-emits 'log' on every exec().
     ff.on('log', ({ message }) => appendLog(message));
 
     await ff.exec([
@@ -1553,7 +1574,10 @@ async function convertToWav(g, cls, idx){
     ]);
 
     const data = await ff.readFile(outName);
-    const wavBlob = new Blob([data.buffer], { type: 'audio/wav' });
+    // readFile returns Uint8Array; make an ArrayBuffer copy so Blob() is happy.
+    const wavBytes = data instanceof Uint8Array ? data : new Uint8Array(data);
+    const wavBlob  = new Blob([wavBytes.buffer], { type: 'audio/wav' });
+
     const wavName = `stream-${idx}-ssrc-${g.ssrc.toString(16)}.wav`;
     const url = URL.createObjectURL(wavBlob);
     const a = document.createElement('a');
@@ -1561,7 +1585,7 @@ async function convertToWav(g, cls, idx){
     document.body.appendChild(a); a.click();
     setTimeout(() => { URL.revokeObjectURL(url); a.remove(); }, 400);
 
-    rep.firstElementChild.innerHTML = `
+    status.outerHTML = `
       <div class="okbox">
         <b>${esc(wavName)}</b> written — ${fmtBytes(wavBlob.size)}<br>
         ${cls.clock} Hz · mono · ${fmtDur(built.stats.framesEmitted * cls.frameSamples / cls.clock)}<br>
@@ -1571,11 +1595,14 @@ async function convertToWav(g, cls, idx){
     try { await ff.deleteFile(inName); } catch(e){}
     try { await ff.deleteFile(outName); } catch(e){}
   } catch(e){
-    console.error(e);
-    rep.firstElementChild.innerHTML = `<div class="errbox">
-      ffmpeg.wasm failed: ${esc(e.message)}<br>
-      You can still download the .${cls.isWB ? 'awb' : 'amr'} file and decode it with a native
-      <code>ffmpeg -i file.${cls.isWB ? 'awb' : 'amr'} out.wav</code>.
+    console.error('ffmpeg.wasm conversion failed:', e);
+    const msg = e && e.message ? e.message : (e == null ? 'unknown error' : String(e));
+    status.outerHTML = `<div class="errbox">
+      ffmpeg.wasm failed: ${esc(msg)}<br>
+      <span style="font-size:11px;color:#8b98a8">
+        Fallback: download the .${cls.isWB ? 'awb' : 'amr'} file above and run
+        <code>ffmpeg -i file.${cls.isWB ? 'awb' : 'amr'} out.wav</code> natively.
+      </span>
     </div>`;
   } finally {
     if (btn) btn.disabled = false;
