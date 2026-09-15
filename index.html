@@ -1199,15 +1199,32 @@ function countFrameTypes(g, cls){
    ffmpeg.wasm
    ===================================================================== */
 let ffmpegPromise = null;
+let ffmpegPromise = null;
 function getFFmpeg(){
   if (ffmpegPromise) return ffmpegPromise;
   ffmpegPromise = (async () => {
     const { FFmpeg } = FFmpegWASM;
+    const { toBlobURL } = FFmpegUtil;
+
     const ff = new FFmpeg();
+
+    const coreBase   = 'https://unpkg.com/@ffmpeg/core@0.12.6/dist/umd';
+    const ffmpegBase = 'https://unpkg.com/@ffmpeg/ffmpeg@0.12.10/dist/umd';
+
+    // The UMD build spawns its class worker from a sibling chunk.  A Worker
+    // cannot be constructed from a cross-origin URL, so fetch the chunk and
+    // pass it in as a same-origin blob: URL via classWorkerURL.
+    const classWorkerURL = await toBlobURL(
+      `${ffmpegBase}/814.ffmpeg.js`,
+      'text/javascript'
+    );
+
     await ff.load({
-      coreURL: 'https://unpkg.com/@ffmpeg/core@0.12.6/dist/umd/ffmpeg-core.js',
-      wasmURL: 'https://unpkg.com/@ffmpeg/core@0.12.6/dist/umd/ffmpeg-core.wasm'
+      coreURL: await toBlobURL(`${coreBase}/ffmpeg-core.js`,   'text/javascript'),
+      wasmURL: await toBlobURL(`${coreBase}/ffmpeg-core.wasm`, 'application/wasm'),
+      classWorkerURL
     });
+
     return ff;
   })();
   return ffmpegPromise;
