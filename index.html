@@ -563,7 +563,6 @@ function parseSipMessagesFromStream(s, srcIp, dstIp){
 }
 
 function findPacketTs(stream, byteOffset){
-  let running = 0;
   const arr = stream.packets.slice().sort((a, b) => a.ts - b.ts);
   if (!arr.length) return 0;
   let base = null;
@@ -1172,7 +1171,7 @@ function classifyStream(g){
 }
 
 /* =====================================================================
-   FRAME-TYPE STATISTICS (for explicit SID / CN / NO_DATA display)
+   FRAME-TYPE STATISTICS
    ===================================================================== */
 function countFrameTypes(g, cls){
   const SID_FT = cls.isWB ? 9 : 8;
@@ -1196,9 +1195,8 @@ function countFrameTypes(g, cls){
 }
 
 /* =====================================================================
-   ffmpeg.wasm
+   ffmpeg.wasm  (fixed: single declaration)
    ===================================================================== */
-let ffmpegPromise = null;
 let ffmpegPromise = null;
 function getFFmpeg(){
   if (ffmpegPromise) return ffmpegPromise;
