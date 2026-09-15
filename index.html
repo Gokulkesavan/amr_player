@@ -1218,7 +1218,7 @@ async function getFFmpeg(onLog){
   const { createFFmpeg } = window.FFmpeg;
   const ff = createFFmpeg({
     log: false,
-    corePath: 'https://unpkg.com/@ffmpeg/core-st@0.11.1/dist/ffmpeg-core.js'
+    corePath: 'https://unpkg.com/@ffmpeg/core@0.11.0/dist/ffmpeg-core.js'
   });
   if (onLog) ff.setLogger(({ message }) => onLog(message));
 
