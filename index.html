@@ -134,9 +134,7 @@ pre .cm{color:#6b7d92;font-style:italic}
 </div>
 
 <div id="app" hidden><div class="container" id="content"></div></div>
-
-<script src="https://unpkg.com/@ffmpeg/ffmpeg@0.12.10/dist/umd/ffmpeg.js"></script>
-<script src="https://unpkg.com/@ffmpeg/util@0.12.1/dist/umd/index.js"></script>
+<script src="https://unpkg.com/@ffmpeg/ffmpeg@0.11.6/dist/ffmpeg.min.js"></script>
 <script>
 /* =====================================================================
    PCAP / PCAPNG
@@ -1195,51 +1193,43 @@ function countFrameTypes(g, cls){
 }
 
 /* =====================================================================
-   ffmpeg.wasm  (fixed: single declaration)
+   ffmpeg.wasm  (0.11.x — single-file UMD, no classWorkerURL needed)
    ===================================================================== */
-let ffmpegPromise = null;
-function getFFmpeg(){
-  if (ffmpegPromise) return ffmpegPromise;
-  ffmpegPromise = (async () => {
-    if (typeof FFmpegWASM === 'undefined' || typeof FFmpegWASM.FFmpeg !== 'function')
-      throw new Error('@ffmpeg/ffmpeg failed to load from CDN (FFmpegWASM.FFmpeg missing)');
-    if (typeof FFmpegUtil === 'undefined' || typeof FFmpegUtil.toBlobURL !== 'function')
-      throw new Error('@ffmpeg/util failed to load from CDN (FFmpegUtil.toBlobURL missing)');
+let ffmpegInstance  = null;
+let ffmpegLoadStart = null;
 
-    const { FFmpeg } = FFmpegWASM;
-    const { toBlobURL } = FFmpegUtil;
-
-    const ffmpegVersion = '0.12.10';
-    const coreVersion   = '0.12.6';
-
-    // Browsers refuse `new Worker(crossOriginUrl)`.  So we build a tiny
-    // same-origin ES-module wrapper that dynamically imports the real
-    // worker chunk from the CDN.  FFmpeg constructs its worker with
-    // { type: 'module' }, so the wrapper must be valid ESM — which it is.
-    const workerURL = `https://unpkg.com/@ffmpeg/ffmpeg@${ffmpegVersion}/dist/umd/814.ffmpeg.js`;
-    const wrapperCode = `await import(${JSON.stringify(workerURL)});`;
-    const wrapperBlob = new Blob([wrapperCode], { type: 'text/javascript' });
-    const classWorkerURL = URL.createObjectURL(wrapperBlob);
-
-    const coreBase = `https://unpkg.com/@ffmpeg/core@${coreVersion}/dist/umd`;
-
-    let coreURL, wasmURL;
-    try {
-      coreURL = await toBlobURL(`${coreBase}/ffmpeg-core.js`,   'text/javascript');
-      wasmURL = await toBlobURL(`${coreBase}/ffmpeg-core.wasm`, 'application/wasm');
-    } catch (e) {
-      throw new Error('Failed to fetch ffmpeg core from unpkg: ' + (e && e.message ? e.message : e));
-    }
-
-    const ff = new FFmpeg();
-    await ff.load({ coreURL, wasmURL, classWorkerURL });
+async function getFFmpeg(onLog){
+  // Already loaded — just refresh the logger if the caller wants one.
+  if (ffmpegInstance && ffmpegInstance.isLoaded()){
+    if (onLog) ffmpegInstance.setLogger(({ message }) => onLog(message));
+    return ffmpegInstance;
+  }
+  // Load in progress — piggyback on it.
+  if (ffmpegLoadStart){
+    const ff = await ffmpegLoadStart;
+    if (onLog) ff.setLogger(({ message }) => onLog(message));
     return ff;
-  })();
-  // Allow retry on next call if it failed.
-  ffmpegPromise.catch(() => { ffmpegPromise = null; });
-  return ffmpegPromise;
-}
+  }
 
+  if (!window.FFmpeg || typeof window.FFmpeg.createFFmpeg !== 'function')
+    throw new Error('@ffmpeg/ffmpeg 0.11.x failed to load (window.FFmpeg.createFFmpeg missing)');
+
+  const { createFFmpeg } = window.FFmpeg;
+  const ff = createFFmpeg({
+    log: false,
+    corePath: 'https://unpkg.com/@ffmpeg/core@0.11.0/dist/ffmpeg-core.js'
+  });
+  if (onLog) ff.setLogger(({ message }) => onLog(message));
+
+  ffmpegLoadStart = ff.load().then(() => {
+    ffmpegInstance = ff;
+    return ff;
+  }).catch(err => {
+    ffmpegLoadStart = null;   // allow retry on next click
+    throw err;
+  });
+  return ffmpegLoadStart;
+}
 /* =====================================================================
    UI
    ===================================================================== */
@@ -1522,14 +1512,11 @@ function extractAMR(g, cls, idx){
 }
 
 /* ---- Convert to WAV using ffmpeg.wasm ---- */
-/* ---- Convert to WAV using ffmpeg.wasm ---- */
 async function convertToWav(g, cls, idx){
   const rep = document.getElementById('report-' + idx);
   const btn = document.getElementById('convert-' + idx);
   if (btn) btn.disabled = true;
 
-  // Build a stable status element + log element once, so nothing we do
-  // later (innerHTML on rep.firstElementChild) can wipe them.
   rep.innerHTML = '';
   const status = document.createElement('div');
   status.className = 'infobox';
@@ -1545,10 +1532,10 @@ async function convertToWav(g, cls, idx){
   };
 
   try {
-    const ff = await getFFmpeg();
+    const ff = await getFFmpeg(appendLog);
     logBox.classList.add('show');
 
-    const ext = cls.isWB ? 'awb' : 'amr';
+    const ext     = cls.isWB ? 'awb' : 'amr';
     const inName  = 'in.' + ext;
     const outName = 'out.wav';
 
@@ -1557,23 +1544,12 @@ async function convertToWav(g, cls, idx){
     const built = buildAMRFile(g.packets, cls.isWB, cls.octetAlign,
                                cls.frameSamples, { replaceSid: true });
 
-    await ff.writeFile(inName, built.bytes);
+    ff.FS('writeFile', inName, built.bytes);
 
     status.textContent = 'Decoding with ffmpeg.wasm…';
-    // Register the log listener once per conversion.  Using { once:false }
-    // here is fine — ffmpeg re-emits 'log' on every exec().
-    ff.on('log', ({ message }) => appendLog(message));
+    await ff.run('-i', inName, '-ar', String(cls.clock), '-ac', '1', outName);
 
-    await ff.exec([
-      '-hide_banner', '-y',
-      '-i', inName,
-      '-ar', String(cls.clock),
-      '-ac', '1',
-      outName
-    ]);
-
-    const data = await ff.readFile(outName);
-    // readFile returns Uint8Array; make an ArrayBuffer copy so Blob() is happy.
+    const data = ff.FS('readFile', outName);   // 0.11.x returns Uint8Array
     const wavBytes = data instanceof Uint8Array ? data : new Uint8Array(data);
     const wavBlob  = new Blob([wavBytes.buffer], { type: 'audio/wav' });
 
@@ -1591,8 +1567,8 @@ async function convertToWav(g, cls, idx){
         WAV downloaded. The <code>.${ext}</code> file is still available via the button above.
       </div>`;
 
-    try { await ff.deleteFile(inName); } catch(e){}
-    try { await ff.deleteFile(outName); } catch(e){}
+    try { ff.FS('unlink', inName); } catch(e){}
+    try { ff.FS('unlink', outName); } catch(e){}
   } catch(e){
     console.error('ffmpeg.wasm conversion failed:', e);
     const msg = e && e.message ? e.message : (e == null ? 'unknown error' : String(e));
@@ -1607,6 +1583,7 @@ async function convertToWav(g, cls, idx){
     if (btn) btn.disabled = false;
   }
 }
+
 
 /* =====================================================================
    FILE INPUT
