@@ -3,293 +3,144 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>PCAP SIP/RTP Analyser — timestamp-accurate audio extraction</title>
+<title>AMR / AMR-WB Extractor</title>
 <style>
 :root{
-  --bg:#0b0f14;--bg2:#0f151c;--panel:#141b24;--panel2:#1a2330;--border:#25313f;
+  --bg:#0a0e13;--panel:#121a23;--panel2:#182230;--border:#233040;
   --text:#e6edf3;--muted:#8b98a8;--accent:#58a6ff;--ok:#3fb950;--warn:#d29922;--err:#f85149;
   --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
 }
 *{box-sizing:border-box}
-html,body{height:100%}
-body{margin:0;background:radial-gradient(1200px 600px at 20% -10%,#132030 0%,var(--bg) 55%) no-repeat,var(--bg);
-  color:var(--text);font:14px/1.45 system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif}
+body{margin:0;background:var(--bg);color:var(--text);
+  font:14px/1.5 system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif}
 button{font:inherit;cursor:pointer}
-code{font-family:var(--mono)}
+code,pre{font-family:var(--mono)}
 
-header{display:flex;align-items:center;gap:16px;flex-wrap:wrap;padding:11px 18px;
-  border-bottom:1px solid var(--border);background:rgba(12,18,25,.88);
-  backdrop-filter:blur(8px);position:sticky;top:0;z-index:60}
-.brand{font-weight:700;font-size:15px;display:flex;align-items:center;gap:8px}
-.brand .dot{width:9px;height:9px;border-radius:50%;background:var(--ok);box-shadow:0 0 10px var(--ok)}
-.filebox{margin-left:auto;display:flex;align-items:center;gap:10px;font-size:12.5px;color:var(--muted)}
-.btn{background:var(--panel2);color:var(--text);border:1px solid var(--border);padding:6px 12px;border-radius:8px;transition:.15s}
-.btn:hover{background:#22303f;border-color:#33445a}
+header{display:flex;align-items:center;gap:14px;padding:12px 20px;
+  border-bottom:1px solid var(--border);background:var(--panel);position:sticky;top:0;z-index:20;flex-wrap:wrap}
+header h1{margin:0;font-size:15px;font-weight:700;letter-spacing:.3px;display:flex;align-items:center;gap:8px}
+header h1 .dot{width:9px;height:9px;border-radius:50%;background:var(--ok);box-shadow:0 0 10px var(--ok)}
+header .spacer{flex:1}
+header .fn{font-size:12.5px;color:var(--muted);font-family:var(--mono);max-width:340px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.btn{background:var(--panel2);color:var(--text);border:1px solid var(--border);
+  padding:7px 14px;border-radius:8px;font-size:13px;font-weight:500;transition:.15s}
+.btn:hover{background:#233043;border-color:#35485d}
 .btn.primary{background:#1f6feb;border-color:#1f6feb;color:#fff}
-.btn.primary:hover{background:#2a7ff5}
-.btn:disabled{opacity:.4;cursor:not-allowed}
+.btn.primary:hover{background:#2d7ff5}
+.btn.ok{background:#1f6f3d;border-color:#2a9a51;color:#fff}
+.btn.ok:hover{background:#2a9a51}
+.btn:disabled{opacity:.5;cursor:not-allowed}
 
-.drop{max-width:760px;margin:7vh auto;text-align:center;padding:46px 28px;border:2px dashed var(--border);
-  border-radius:16px;background:var(--bg2)}
-.drop.hot{border-color:var(--accent);background:#101c2b}
-.drop h2{margin:0 0 10px;font-size:19px}
-.drop p{color:var(--muted);margin:6px 0}
-.drop .note{margin-top:20px;font-size:12px;color:#5c6b7c;line-height:1.7;text-align:left;max-width:560px;margin-left:auto;margin-right:auto}
-
-.tabs{display:flex;gap:4px;padding:10px 18px 0;border-bottom:1px solid var(--border);flex-wrap:wrap}
-.tab{background:transparent;border:1px solid transparent;border-bottom:none;color:var(--muted);
-  padding:8px 14px;border-radius:8px 8px 0 0;font-size:13px;font-weight:600}
-.tab:hover{color:var(--text);background:var(--panel)}
-.tab.active{color:var(--text);background:var(--panel);border-color:var(--border);border-bottom:1px solid var(--panel);margin-bottom:-1px}
-.tab .count{display:inline-block;margin-left:6px;background:#233043;color:var(--muted);
-  border-radius:20px;padding:0 7px;font-size:11px;font-weight:600}
-
-.view{display:none}
-.view.active{display:block}
-.wrap{display:flex;align-items:flex-start;min-height:calc(100vh - 96px)}
-.left{flex:1 1 auto;min-width:0;padding:12px 14px 40px}
-.right{flex:0 0 540px;max-width:46vw;border-left:1px solid var(--border);background:var(--panel);
-  position:sticky;top:52px;height:calc(100vh - 52px);overflow:auto}
-@media(max-width:1080px){
-  .wrap{flex-direction:column}
-  .right{position:static;height:auto;max-width:none;width:100%;border-left:none;border-top:1px solid var(--border)}
-}
-
-.toolbar{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:10px}
-.toolbar input[type=search],.toolbar select{background:var(--panel);border:1px solid var(--border);
-  color:var(--text);padding:7px 10px;border-radius:8px;font:inherit;font-size:13px;outline:none;min-width:110px}
-.toolbar input[type=search]{flex:1 1 240px;font-family:var(--mono);font-size:12.5px}
-.toolbar input:focus,.toolbar select:focus{border-color:var(--accent)}
-.chips{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px}
-.chip{background:var(--panel);border:1px solid var(--border);color:var(--muted);border-radius:20px;
-  padding:3px 11px;font-size:12px;font-weight:600}
-.chip:hover{color:var(--text)}
-.chip.on{background:#1f6feb22;border-color:#1f6feb;color:#8cc3ff}
-.hint{color:var(--muted);font-size:12px;margin-left:auto}
-
-.tablewrap{border:1px solid var(--border);border-radius:10px;overflow:hidden;background:var(--panel)}
-table{width:100%;border-collapse:collapse;font-size:12.5px}
-thead th{position:sticky;top:0;background:var(--panel2);color:var(--muted);text-align:left;
-  padding:9px 10px;font-weight:600;border-bottom:1px solid var(--border);white-space:nowrap;
-  z-index:5;font-size:11.5px;text-transform:uppercase;letter-spacing:.4px}
-tbody td{padding:7px 10px;border-bottom:1px solid #1c2530;vertical-align:top}
-tbody tr{cursor:pointer}
-tbody tr:hover{background:#182231}
-tbody tr.sel{background:#12283f;box-shadow:inset 3px 0 0 var(--accent)}
-td.no{color:var(--muted);font-family:var(--mono);text-align:right;width:56px}
-td.time{font-family:var(--mono);white-space:nowrap;color:#a5b3c4;width:118px}
-td.ip{font-family:var(--mono);white-space:nowrap;font-size:11.5px;max-width:180px;overflow:hidden;text-overflow:ellipsis}
-td.proto{white-space:nowrap;width:82px}
-td.len{text-align:right;font-family:var(--mono);color:var(--muted);width:60px}
-td.info{font-size:12px;word-break:break-word}
-.pai{color:#7ea6d8;font-family:var(--mono);font-size:11px;word-break:break-all}
-
-.tag{display:inline-block;padding:1px 7px;border-radius:5px;font-size:10.5px;font-weight:700;letter-spacing:.3px}
-.p-SIP{background:#1f6feb26;color:#79b8ff;border:1px solid #1f6feb55}
-.p-RTP{background:#3fb95022;color:#5fd07a;border:1px solid #3fb95055}
-.p-TCP{background:#8b949e22;color:#a9b4c0;border:1px solid #8b949e44}
-.p-UDP{background:#a371f722;color:#c39bf7;border:1px solid #a371f755}
-.p-ESP{background:#d2992222;color:#e0b341;border:1px solid #d2992255}
-.p-ICMPv6{background:#d2992222;color:#e0b341;border:1px solid #d2992255}
-.p-other{background:#8b949e22;color:#a9b4c0;border:1px solid #8b949e44}
-
-.empty{padding:40px;text-align:center;color:var(--muted)}
-
-.detail-head{display:flex;align-items:center;gap:10px;padding:10px 14px;border-bottom:1px solid var(--border);
-  background:var(--panel2);position:sticky;top:0;z-index:6}
-.detail-head .t{font-weight:700;font-size:13px}
-.detail-head .s{color:var(--muted);font-size:12px;font-family:var(--mono);overflow:hidden;
-  text-overflow:ellipsis;white-space:nowrap;max-width:340px}
-.detail-head button{margin-left:auto}
-pre.frame{margin:0;padding:14px;font-family:var(--mono);font-size:11.8px;line-height:1.5;
-  white-space:pre;overflow:auto;color:#c9d5e1}
-pre.frame .proto{color:#79b8ff;font-weight:700}
-.kv{display:grid;grid-template-columns:auto 1fr;gap:2px 12px;padding:12px 14px;
-  border-bottom:1px solid var(--border);font-size:12.5px}
-.kv dt{color:var(--muted)}
-.kv dd{margin:0;font-family:var(--mono);word-break:break-all}
-
-.card{background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:14px;margin-bottom:14px}
-.card h3{margin:0 0 12px;font-size:13px;text-transform:uppercase;letter-spacing:.6px;color:var(--muted)}
-.scrollx{overflow-x:auto}
-svg{display:block}
-.legend{display:flex;gap:14px;flex-wrap:wrap;font-size:12px;color:var(--muted);margin-top:10px}
-.legend i{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:5px;vertical-align:-1px}
-
-.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:14px}
-.stat{background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:14px}
-.stat .label{color:var(--muted);font-size:11.5px;text-transform:uppercase;letter-spacing:.5px}
-.stat .value{font-size:22px;font-weight:700;margin-top:4px;font-family:var(--mono)}
-.stat .sub{color:var(--muted);font-size:11.5px;margin-top:3px;font-family:var(--mono)}
-.bar{height:7px;border-radius:4px;background:#22303f;overflow:hidden;margin-top:6px}
-.bar>span{display:block;height:100%;background:linear-gradient(90deg,#1f6feb,#58a6ff)}
-.rowline{display:flex;align-items:center;gap:10px;padding:5px 0;font-size:12.5px;border-bottom:1px solid #1a2330}
-.rowline:last-child{border-bottom:none}
-.rowline .n{font-family:var(--mono);color:var(--muted);min-width:52px;text-align:right}
-.rowline .g{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
-  font-family:var(--mono);font-size:11.5px}
-.rowline .v{font-family:var(--mono);color:var(--accent);font-weight:600}
-
-table.mini{font-size:12px;width:100%;border-collapse:collapse}
-table.mini th{background:transparent;border-bottom:1px solid var(--border);padding:6px 8px;
-  font-size:11px;color:var(--muted);text-align:left;text-transform:uppercase;letter-spacing:.4px}
-table.mini td{padding:6px 8px;border-bottom:1px solid #1a2330;font-family:var(--mono);font-size:11.5px}
-table.mini tbody tr{cursor:pointer}
-table.mini tbody tr:hover{background:#182231}
-table.mini tr{cursor:default}
-
-.streamcard{background:var(--panel);border:1px solid var(--border);border-radius:10px;
-  padding:14px;margin-bottom:14px}
-.streamcard h4{margin:0 0 10px;font-size:14px;display:flex;align-items:center;gap:10px;flex-wrap:wrap}
-.streamcard h4 .badge{font-family:var(--mono);font-size:11px;font-weight:600;color:var(--muted);
-  background:#1a2330;padding:2px 8px;border-radius:6px;border:1px solid var(--border)}
-.statsrow{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:10px;margin-bottom:12px}
-.statbox{background:#101820;border:1px solid var(--border);border-radius:8px;padding:8px 10px}
-.statbox .l{color:var(--muted);font-size:10.5px;text-transform:uppercase;letter-spacing:.4px}
-.statbox .v{font-family:var(--mono);font-size:15px;font-weight:700;margin-top:2px}
-.statbox .v.ok{color:var(--ok)}
-.statbox .v.warn{color:var(--warn)}
-.statbox .v.err{color:var(--err)}
-.actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}
-canvas.timeline{width:100%;height:56px;background:#0d141b;border:1px solid var(--border);border-radius:8px;display:block}
-
-.legendline{display:flex;gap:14px;flex-wrap:wrap;font-size:11.5px;color:var(--muted);margin-top:8px}
-.legendline i{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:5px;vertical-align:-1px}
-
-.modal{position:fixed;inset:0;background:rgba(0,0,0,.6);display:flex;align-items:center;
-  justify-content:center;z-index:100;padding:20px}
-.modal .box{background:var(--panel);border:1px solid var(--border);border-radius:12px;
-  max-width:760px;width:100%;max-height:80vh;overflow:auto;padding:20px}
-.modal h3{margin:0 0 12px}
-.spinner{width:38px;height:38px;border:3px solid #25313f;border-top-color:var(--accent);
-  border-radius:50%;animation:spin 1s linear infinite;margin:40px auto}
+.drop{max-width:700px;margin:10vh auto;text-align:center;padding:50px 28px;
+  border:2px dashed var(--border);border-radius:16px;background:var(--panel)}
+.drop.hot{border-color:var(--accent);background:#0f1c2b}
+.drop h2{margin:0 0 12px;font-size:19px}
+.drop p{color:var(--muted);margin:8px 0}
+.spinner{width:40px;height:40px;border:3px solid var(--border);
+  border-top-color:var(--accent);border-radius:50%;animation:spin 1s linear infinite;margin:40px auto}
 @keyframes spin{to{transform:rotate(360deg)}}
-.errbox{background:#2a1518;border:1px solid #f8514955;color:#ffb4b4;padding:12px 14px;
-  border-radius:8px;font-size:12.5px;margin-bottom:14px}
+
+.container{max-width:1100px;margin:0 auto;padding:20px}
+
+.summary{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));
+  gap:12px;margin-bottom:24px}
+.stat{background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:12px 14px}
+.stat .l{color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.5px}
+.stat .v{font-size:22px;font-weight:700;font-family:var(--mono);margin-top:4px}
+
+section{margin-bottom:26px}
+section h2{font-size:13px;text-transform:uppercase;letter-spacing:.7px;color:var(--muted);
+  margin:0 0 12px;font-weight:600;display:flex;align-items:center;gap:8px}
+section h2 .badge{background:var(--panel2);border:1px solid var(--border);color:var(--text);
+  padding:1px 8px;border-radius:20px;font-size:11px;font-weight:600;letter-spacing:0}
+
+.card{background:var(--panel);border:1px solid var(--border);border-radius:10px;
+  padding:14px 16px;margin-bottom:12px}
+.card h3{margin:0 0 12px;font-size:13px;color:var(--text);font-weight:600;display:flex;
+  align-items:center;gap:8px;flex-wrap:wrap}
+.tag{font-family:var(--mono);font-size:11px;padding:2px 8px;border-radius:6px;
+  background:var(--panel2);border:1px solid var(--border);color:var(--muted);font-weight:500}
+.tag.ok{color:#7ee2a0;border-color:#2a9a5155;background:#12261a}
+.tag.warn{color:#e5b955;border-color:#d2992255;background:#241e10}
+.tag.err{color:#ff9b94;border-color:#f8514955;background:#2a1518}
+.tag.info{color:#8cc3ff;border-color:#1f6feb55;background:#0f1c2b}
+.tag.big{font-size:12.5px;padding:4px 12px;font-weight:700}
+
+.kv{display:grid;grid-template-columns:minmax(140px,auto) 1fr;gap:4px 16px;
+  font-size:12.5px;padding:2px 0}
+.kv dt{color:var(--muted);font-size:12px}
+.kv dd{margin:0;font-family:var(--mono);word-break:break-all;font-size:12px}
+
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:4px}
+@media (max-width:640px){.grid2{grid-template-columns:1fr}}
+.panelbox{background:#0d141c;border:1px solid var(--border);border-radius:8px;padding:10px 12px}
+.panelbox h4{margin:0 0 8px;font-size:11px;text-transform:uppercase;letter-spacing:.6px;
+  color:var(--muted);font-weight:600}
+.frow{display:flex;justify-content:space-between;font-size:12.5px;padding:3px 0;
+  border-bottom:1px solid #1c2530;font-family:var(--mono)}
+.frow:last-child{border-bottom:none}
+.frow .k{color:var(--muted)}
+.frow .v{color:var(--text);font-weight:600}
+
+pre{background:#080c11;border:1px solid var(--border);border-radius:8px;padding:12px 14px;
+  font-size:12px;overflow:auto;color:#c9d5e1;line-height:1.5;margin:8px 0}
+pre .cm{color:#6b7d92;font-style:italic}
+
+.warnbox{background:#241e10;border:1px solid #d2992255;color:#e5b955;
+  padding:11px 14px;border-radius:8px;font-size:12.5px;margin-bottom:14px;line-height:1.6}
+.errbox{background:#2a1518;border:1px solid #f8514955;color:#ffb4b4;
+  padding:11px 14px;border-radius:8px;font-size:12.5px;margin-bottom:14px}
+.okbox{background:#12261a;border:1px solid #2a9a5155;color:#a3e6b8;
+  padding:11px 14px;border-radius:8px;font-size:12.5px;margin-bottom:14px}
+.infobox{background:#0f1c2b;border:1px solid #1f6feb55;color:#8cc3ff;
+  padding:11px 14px;border-radius:8px;font-size:12.5px;margin-bottom:14px}
+
+.actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:14px;align-items:center}
+.hint{color:var(--muted);font-size:12px;font-style:italic}
+
+.bytes{font-family:var(--mono);font-size:11px;color:#a5b3c4;
+  background:#080c11;border:1px solid var(--border);border-radius:6px;
+  padding:8px 10px;overflow-x:auto;white-space:pre}
+
+.fflog{font-family:var(--mono);font-size:11px;color:#a5b3c4;
+  background:#080c11;border:1px solid var(--border);border-radius:6px;
+  padding:8px 10px;max-height:140px;overflow:auto;white-space:pre-wrap;
+  margin-top:8px;display:none}
+.fflog.show{display:block}
+
+.progress{height:4px;background:#1c2530;border-radius:2px;overflow:hidden;margin-top:8px}
+.progress > div{height:100%;background:var(--accent);width:0;transition:width .2s}
 </style>
 </head>
 <body>
 
 <header>
-  <div class="brand"><span class="dot"></span>PCAP SIP / RTP Analyser</div>
-  <div class="filebox">
-    <span id="fileName">no capture loaded</span>
-    <button class="btn" id="openBtn">Open .pcap / .pcapng…</button>
-    <input type="file" id="fileInput" accept=".pcap,.pcapng,.cap,application/vnd.tcpdump.pcap" hidden>
-  </div>
+  <h1><span class="dot"></span>AMR / AMR-WB Extractor</h1>
+  <span class="fn" id="fileName"></span>
+  <span class="spacer"></span>
+  <button class="btn primary" id="openBtn">Open .pcap / .pcapng…</button>
+  <input type="file" id="fileInput" accept=".pcap,.pcapng,.cap" hidden>
 </header>
 
 <div class="drop" id="drop">
-  <h2>📡 Drop a <code>.pcap</code> or <code>.pcapng</code> file here</h2>
+  <h2>📻 Drop a <code>.pcap</code> or <code>.pcapng</code></h2>
   <p>…or <button class="btn primary" id="pickBtn">browse for a capture</button></p>
-  <p id="autoMsg" style="margin-top:14px;font-size:12.5px">Checking for a local capture…</p>
-  <div class="note">
-    <b>Parsing notes</b><br>
-    • Ethernet / Linux SLL / raw IP link layers, IPv4 + IPv6 with extension headers.<br>
-    • ESP is decoded when the payload is <b>not encrypted</b> (<code>ealg=null</code>, RFC 2410) —
-      exactly what IMS <code>sec-agree</code> uses when the operator configures the null cipher.
-      The ICV length (SHA-1-96 / SHA-256-128) is auto-detected.<br>
-    • SIP is reassembled from TCP streams by sequence number; SDP <code>rtpmap</code>/<code>fmtp</code>
-      drive the RTP payload interpretation.<br>
-    • Audio duration comes from <b>RTP timestamps</b>, not arrival time — that is what fixes the
-      “wrong duration / crackling” you get from naive RTP extraction.
-  </div>
+  <p class="hint" style="margin-top:22px;max-width:540px;margin-left:auto;margin-right:auto;text-align:left">
+    Reads SIP/SDP to learn the AMR mode, correlates RTP streams, and writes proper
+    <code>.amr</code> / <code>.awb</code> files — with lost frames padded as
+    <code>NO_DATA</code> so the duration stays correct. WAV conversion runs
+    entirely in your browser via <b>ffmpeg.wasm</b>.
+  </p>
 </div>
 
-<div id="app" hidden>
-  <nav class="tabs">
-    <button class="tab active" data-tab="packets">Packets <span class="count" id="cntPk">0</span></button>
-    <button class="tab" data-tab="sip">SIP Flow <span class="count" id="cntSip">0</span></button>
-    <button class="tab" data-tab="rtp">RTP Streams <span class="count" id="cntRtp">0</span></button>
-    <button class="tab" data-tab="audio">Audio Export <span class="count" id="cntAud">0</span></button>
-    <button class="tab" data-tab="stats">Statistics</button>
-  </nav>
+<div id="app" hidden><div class="container" id="content"></div></div>
 
-  <section class="view active" id="view-packets">
-    <div class="wrap">
-      <div class="left">
-        <div class="toolbar">
-          <input type="search" id="q" placeholder="Filter… e.g. INVITE, 183, RTP, 0x8e771a18, 8101" spellcheck="false">
-          <select id="protoSel"><option value="">All protocols</option></select>
-          <select id="epSel"><option value="">All endpoints</option></select>
-          <button class="btn" id="clearBtn">Reset</button>
-          <span class="hint" id="hint"></span>
-        </div>
-        <div class="chips" id="chips"></div>
-        <div class="tablewrap">
-          <table>
-            <thead><tr>
-              <th>#</th><th>Time</th><th>Source</th><th>Dest</th><th>Proto</th><th>Len</th><th>Info</th>
-            </tr></thead>
-            <tbody id="tbody"></tbody>
-          </table>
-        </div>
-      </div>
-      <aside class="right" id="detailPane">
-        <div class="empty">Select a packet to see its decoded layers</div>
-      </aside>
-    </div>
-  </section>
-
-  <section class="view" id="view-sip">
-    <div class="left" style="max-width:100%">
-      <div class="card">
-        <h3>SIP Ladder Diagram</h3>
-        <div class="scrollx" id="ladderWrap"></div>
-        <div class="legend" id="ladderLegend"></div>
-      </div>
-      <div class="card">
-        <h3>Call detail</h3>
-        <div id="callInfo"></div>
-      </div>
-    </div>
-  </section>
-
-  <section class="view" id="view-rtp">
-    <div class="left" style="max-width:100%">
-      <div class="card"><h3>RTP Stream Summary</h3><div id="rtpSummary"></div></div>
-      <div class="card" id="rtpDetailCard" hidden><h3>Stream detail</h3><div id="rtpDetail"></div></div>
-    </div>
-  </section>
-
-  <section class="view" id="view-audio">
-    <div class="left" style="max-width:100%">
-      <div id="errBox"></div>
-      <div id="audioIntro" class="card">
-        <h3>How the duration is computed</h3>
-        <div style="font-size:12.5px;line-height:1.75;color:#b9c5d3">
-          Each RTP packet carries a 32-bit <b>timestamp</b> expressed in samples of the codec clock
-          (16 000 Hz for AMR-WB, 8 000 Hz for AMR-NB). The gap between two consecutive timestamps is the
-          <b>exact</b> amount of audio that should sit between them — including any packets that were lost
-          in transit. Naive extractors concatenate the payloads they happen to receive and therefore
-          <i>shorten</i> the file and make the codec state machine produce clicks.<br><br>
-          This tool walks the RTP timestamps, inserts <code>NO_DATA</code> frames (FT&nbsp;=&nbsp;15) for every
-          missing 20&nbsp;ms slot, and writes a proper <code>#!AMR-WB</code>&nbsp;/&nbsp;<code>#!AMR</code>
-          storage file. That file plays with the correct length in VLC, ffmpeg, Audacity, etc.
-        </div>
-      </div>
-      <div id="audioBody"></div>
-    </div>
-  </section>
-
-  <section class="view" id="view-stats">
-    <div class="left" style="max-width:100%">
-      <div class="grid" id="statCards"></div>
-      <div class="grid" style="margin-top:14px">
-        <div class="card"><h3>Protocols</h3><div id="protoStats"></div></div>
-        <div class="card"><h3>Top talkers (bytes)</h3><div id="talkerStats"></div></div>
-        <div class="card"><h3>Largest frames</h3><div id="bigStats"></div></div>
-        <div class="card"><h3>SIP timeline</h3><div id="timeline"></div></div>
-      </div>
-    </div>
-  </section>
-</div>
-
+<script src="https://unpkg.com/@ffmpeg/ffmpeg@0.12.10/dist/umd/ffmpeg.js"></script>
+<script src="https://unpkg.com/@ffmpeg/util@0.12.1/dist/umd/index.js"></script>
 <script>
-/* =====================================================================================
-   PART 1 — PCAP / PCAPNG PARSERS
-   ===================================================================================== */
-
+/* =====================================================================
+   PCAP / PCAPNG
+   ===================================================================== */
 function parsePcap(buffer){
   const dv = new DataView(buffer);
   const magic = dv.getUint32(0, false);
@@ -298,7 +149,7 @@ function parsePcap(buffer){
   else if (magic === 0xd4c3b2a1) { le = true;  ns = false; }
   else if (magic === 0xa1b23c4d) { le = false; ns = true;  }
   else if (magic === 0x4d3cb2a1) { le = true;  ns = true;  }
-  else throw new Error('Not a classic pcap file (bad magic)');
+  else throw new Error('Not a classic pcap file (bad magic 0x' + magic.toString(16) + ')');
 
   const linktype = dv.getUint32(20, le);
   const packets = [];
@@ -311,11 +162,8 @@ function parsePcap(buffer){
     const orig   = dv.getUint32(off + 12, le);
     off += 16;
     if (off + incl > len) break;
-    const data = new Uint8Array(buffer, off, incl);
-    packets.push({
-      ts: tsSec + tsFrac / (ns ? 1e9 : 1e6),
-      incl, orig, data, linktype
-    });
+    packets.push({ ts: tsSec + tsFrac / (ns ? 1e9 : 1e6), incl, orig,
+      data: new Uint8Array(buffer, off, incl), linktype });
     off += incl;
   }
   return packets;
@@ -326,9 +174,9 @@ function parsePcapNg(buffer){
   const len = buffer.byteLength;
   let off = 0, le = true;
   const packets = [];
-  let interfaces = [];
+  let ifaces = [];
 
-  function readOptions(o, end){
+  function readOpts(o, end){
     const opts = [];
     while (o + 4 <= end){
       const code = dv.getUint16(o, le);
@@ -336,166 +184,119 @@ function parsePcapNg(buffer){
       if (code === 0) break;
       if (o + 4 + l > end) break;
       opts.push({ code, data: new Uint8Array(buffer, dv.byteOffset + o + 4, l) });
-      o += 4 + l;
-      o = (o + 3) & ~3;
+      o = (o + 4 + l + 3) & ~3;
     }
     return opts;
   }
 
   while (off + 12 <= len){
-    let blockType = dv.getUint32(off, le);
-    let blockLen  = dv.getUint32(off + 4, le);
-
-    if (blockType === 0x0A0D0D0A){                 // Section Header Block
-      const bomBE = dv.getUint32(off + 8, false);
+    let bt = dv.getUint32(off, le);
+    let bl = dv.getUint32(off + 4, le);
+    if (bt === 0x0A0D0D0A){
       const bomLE = dv.getUint32(off + 8, true);
-      if (bomLE === 0x1A2B3C4D) le = true;
-      else if (bomBE === 0x1A2B3C4D) le = false;
-      else throw new Error('pcapng: bad byte-order magic');
-      blockLen = dv.getUint32(off + 4, le);
-      interfaces = [];
-    }
-    else if (blockType === 0x00000001){            // Interface Description Block
+      le = (bomLE === 0x1A2B3C4D);
+      bl = dv.getUint32(off + 4, le);
+      ifaces = [];
+    } else if (bt === 0x00000001){
       const lt = dv.getUint16(off + 8, le);
-      const snaplen = dv.getUint32(off + 12, le);
-      let divisor = 1e6;                            // default: microseconds
-      const opts = readOptions(off + 16, off + blockLen - 4);
+      let divisor = 1e6;
+      const opts = readOpts(off + 16, off + bl - 4);
       for (const o of opts){
-        if (o.code === 9 && o.data.length >= 1){    // if_tsresol
+        if (o.code === 9 && o.data.length >= 1){
           const v = o.data[0];
           divisor = (v & 0x80) ? Math.pow(2, v & 0x7F) : Math.pow(10, v);
         }
       }
-      interfaces.push({ linktype: lt, snaplen, divisor });
-    }
-    else if (blockType === 0x00000006){            // Enhanced Packet Block
-      const ifId   = dv.getUint32(off + 8, le);
-      const tsHigh = dv.getUint32(off + 12, le);
-      const tsLow  = dv.getUint32(off + 16, le);
+      ifaces.push({ linktype: lt, divisor });
+    } else if (bt === 0x00000006){
+      const ifId = dv.getUint32(off + 8, le);
+      const th = dv.getUint32(off + 12, le);
+      const tl = dv.getUint32(off + 16, le);
       const capLen = dv.getUint32(off + 20, le);
-      const origLen= dv.getUint32(off + 24, le);
-      const iface  = interfaces[ifId] || { linktype: 1, divisor: 1e6 };
-      const ticks  = tsHigh * 4294967296 + tsLow;
+      const orig = dv.getUint32(off + 24, le);
+      const iface = ifaces[ifId] || { linktype: 1, divisor: 1e6 };
       if (off + 28 + capLen <= len){
-        packets.push({
-          ts: ticks / iface.divisor,
-          incl: capLen, orig: origLen,
-          data: new Uint8Array(buffer, off + 28, capLen),
-          linktype: iface.linktype
-        });
+        packets.push({ ts: (th * 4294967296 + tl) / iface.divisor,
+          incl: capLen, orig, data: new Uint8Array(buffer, off + 28, capLen),
+          linktype: iface.linktype });
       }
-    }
-    else if (blockType === 0x00000003){            // Simple Packet Block
-      const origLen = dv.getUint32(off + 8, le);
-      const capLen  = Math.min(origLen, blockLen - 16);
-      const iface   = interfaces[0] || { linktype: 1, divisor: 1e6 };
+    } else if (bt === 0x00000003){
+      const orig = dv.getUint32(off + 8, le);
+      const capLen = Math.min(orig, bl - 16);
+      const iface = ifaces[0] || { linktype: 1, divisor: 1e6 };
       if (off + 12 + capLen <= len){
-        packets.push({
-          ts: null, incl: capLen, orig: origLen,
-          data: new Uint8Array(buffer, off + 12, capLen),
-          linktype: iface.linktype
-        });
+        packets.push({ ts: null, incl: capLen, orig,
+          data: new Uint8Array(buffer, off + 12, capLen), linktype: iface.linktype });
       }
-    }
-    else if (blockType === 0x00000002){            // Packet Block (obsolete)
-      const ifId   = dv.getUint16(off + 8, le);
-      const tsHigh = dv.getUint32(off + 12, le);
-      const tsLow  = dv.getUint32(off + 16, le);
+    } else if (bt === 0x00000002){
+      const ifId = dv.getUint16(off + 8, le);
+      const th = dv.getUint32(off + 12, le);
+      const tl = dv.getUint32(off + 16, le);
       const capLen = dv.getUint32(off + 20, le);
-      const origLen= dv.getUint32(off + 24, le);
-      const iface  = interfaces[ifId] || { linktype: 1, divisor: 1e6 };
+      const orig = dv.getUint32(off + 24, le);
+      const iface = ifaces[ifId] || { linktype: 1, divisor: 1e6 };
       if (off + 28 + capLen <= len){
-        packets.push({
-          ts: (tsHigh * 4294967296 + tsLow) / iface.divisor,
-          incl: capLen, orig: origLen,
-          data: new Uint8Array(buffer, off + 28, capLen),
-          linktype: iface.linktype
-        });
+        packets.push({ ts: (th * 4294967296 + tl) / iface.divisor,
+          incl: capLen, orig, data: new Uint8Array(buffer, off + 28, capLen),
+          linktype: iface.linktype });
       }
     }
-
-    if (blockLen <= 0 || off + blockLen > len) break;
-    off += blockLen;
+    if (bl <= 0 || off + bl > len) break;
+    off += bl;
   }
-
-  /* fill missing timestamps from neighbours */
   let last = 0;
   for (const p of packets){ if (p.ts != null) last = p.ts; else p.ts = last; }
-
   return packets;
 }
 
-function parseCaptureBuffer(buffer){
+function parseCapture(buffer){
   const dv = new DataView(buffer);
   if (buffer.byteLength < 4) throw new Error('File too small');
   const m = dv.getUint32(0, false);
-  if (m === 0x0A0D0D0A) return { kind: 'pcapng', packets: parsePcapNg(buffer) };
-  return { kind: 'pcap', packets: parsePcap(buffer) };
+  if (m === 0x0A0D0D0A) return parsePcapNg(buffer);
+  return parsePcap(buffer);
 }
 
-/* =====================================================================================
-   PART 2 — LINK / NETWORK / TRANSPORT DECODERS
-   ===================================================================================== */
-
+/* =====================================================================
+   LINK / NETWORK / TRANSPORT
+   ===================================================================== */
 function ipv6Str(d, off){
-  const parts = [];
-  for (let i = 0; i < 8; i++){
-    parts.push(((d[off + i*2] << 8) | d[off + i*2 + 1]).toString(16));
-  }
-  /* compress longest zero-run */
+  const g = [];
+  for (let i = 0; i < 8; i++) g.push(((d[off + i*2] << 8) | d[off + i*2 + 1]).toString(16));
   let best = -1, bestLen = 0, cur = -1, curLen = 0;
   for (let i = 0; i < 8; i++){
-    if (parts[i] === '0'){ if (cur === -1) cur = i; curLen++; }
+    if (g[i] === '0'){ if (cur === -1) cur = i; curLen++; }
     else { if (curLen > bestLen){ best = cur; bestLen = curLen; } cur = -1; curLen = 0; }
   }
   if (curLen > bestLen){ best = cur; bestLen = curLen; }
-  if (bestLen < 2) return parts.join(':');
-  const head = parts.slice(0, best).join(':');
-  const tail = parts.slice(best + bestLen).join(':');
-  return head + '::' + tail;
+  if (bestLen < 2) return g.join(':');
+  return g.slice(0, best).join(':') + '::' + g.slice(best + bestLen).join(':');
 }
-
-function ipv4Str(d, off){
-  return d[off] + '.' + d[off+1] + '.' + d[off+2] + '.' + d[off+3];
-}
+const ipv4Str = (d, o) => d[o] + '.' + d[o+1] + '.' + d[o+2] + '.' + d[o+3];
 
 function decodeLink(linktype, d){
   switch (linktype){
-    case 1: {                                     // Ethernet
+    case 1: {
       if (d.length < 14) return null;
-      let off = 12, et = (d[12] << 8) | d[13];
-      let p = 14;
+      let et = (d[12] << 8) | d[13], p = 14;
       while (et === 0x8100 || et === 0x88a8 || et === 0x9100){
         if (p + 4 > d.length) return null;
-        et = (d[p + 2] << 8) | d[p + 3];
-        p += 4;
+        et = (d[p + 2] << 8) | d[p + 3]; p += 4;
       }
-      return { ethertype: et, payload: d.subarray(p), layer: 'Ethernet' };
+      return { ethertype: et, payload: d.subarray(p) };
     }
-    case 0: {                                     // BSD loopback / DLT_NULL
+    case 0: {
       if (d.length < 4) return null;
       const fam = d[0] | (d[1] << 8) | (d[2] << 16) | (d[3] << 24);
-      const et = (fam === 2) ? 0x0800 : (fam === 30 || fam === 28 ? 0x86DD : 0);
-      return { ethertype: et, payload: d.subarray(4), layer: 'Null' };
+      const et = fam === 2 ? 0x0800 : (fam === 30 || fam === 28 ? 0x86DD : 0);
+      return { ethertype: et, payload: d.subarray(4) };
     }
-    case 113: {                                   // Linux SLL
-      if (d.length < 16) return null;
-      const et = (d[14] << 8) | d[15];
-      return { ethertype: et, payload: d.subarray(16), layer: 'Linux SLL' };
-    }
-    case 276: {                                   // Linux SLL2
-      if (d.length < 20) return null;
-      const et = (d[0] << 8) | d[1];
-      return { ethertype: et, payload: d.subarray(20), layer: 'Linux SLL2' };
-    }
-    case 12: case 14: case 228:
-      return { ethertype: 0x0800, payload: d, layer: 'Raw IPv4' };
-    case 229:
-      return { ethertype: 0x86DD, payload: d, layer: 'Raw IPv6' };
-    case 101:
-      return { ethertype: d[0] >> 4 === 6 ? 0x86DD : 0x0800, payload: d, layer: 'Raw IP' };
-    default:
-      return null;
+    case 113: return { ethertype: (d[14] << 8) | d[15], payload: d.subarray(16) };
+    case 276: return { ethertype: (d[0] << 8) | d[1], payload: d.subarray(20) };
+    case 12: case 14: case 228: return { ethertype: 0x0800, payload: d };
+    case 229: return { ethertype: 0x86DD, payload: d };
+    case 101: return { ethertype: (d[0] >> 4) === 6 ? 0x86DD : 0x0800, payload: d };
+    default: return null;
   }
 }
 
@@ -505,417 +306,228 @@ function decodeIPv4(d){
   if ((vihl >> 4) !== 4) return null;
   const ihl = (vihl & 0x0F) * 4;
   if (ihl < 20 || d.length < ihl) return null;
-  const totalLen = (d[2] << 8) | d[3];
-  const flagsFrag = (d[6] << 8) | d[7];
-  const fragOffset = flagsFrag & 0x1FFF;
-  const mf = (flagsFrag >> 13) & 1;
-  const protocol = d[9];
-  const src = ipv4Str(d, 12), dst = ipv4Str(d, 16);
-  const end = Math.min(d.length, totalLen || d.length);
-  return {
-    src, dst, protocol,
-    payload: d.subarray(ihl, end),
-    fragmented: fragOffset !== 0 || mf === 1
-  };
+  const total = (d[2] << 8) | d[3];
+  const ff = (d[6] << 8) | d[7];
+  if ((ff & 0x1FFF) || (ff & 0x2000)) return null;
+  return { src: ipv4Str(d, 12), dst: ipv4Str(d, 16), protocol: d[9],
+    payload: d.subarray(ihl, Math.min(d.length, total || d.length)) };
 }
 
 function decodeIPv6(d){
   if (d.length < 40) return null;
   if ((d[0] >> 4) !== 6) return null;
-  const payloadLen = (d[4] << 8) | d[5];
-  const next0 = d[6];
+  const plen = (d[4] << 8) | d[5];
+  let next = d[6];
   const src = ipv6Str(d, 8), dst = ipv6Str(d, 24);
-  let payload = d.subarray(40, Math.min(d.length, 40 + payloadLen || d.length));
-  let next = next0;
+  let payload = d.subarray(40, Math.min(d.length, 40 + plen || d.length));
   let guard = 0;
   while (guard++ < 8){
-    if (next === 0 || next === 43 || next === 60){          // hop-by-hop / routing / dest opts
+    if (next === 0 || next === 43 || next === 60){
       if (payload.length < 8) break;
-      const nh = payload[0];
-      const hdrLen = (payload[1] + 1) * 8;
-      payload = payload.subarray(hdrLen);
-      next = nh;
-    } else if (next === 51){                                 // AH
+      const nh = payload[0], hl = (payload[1] + 1) * 8;
+      payload = payload.subarray(hl); next = nh;
+    } else if (next === 51){
       if (payload.length < 12) break;
-      const nh = payload[0];
-      const hdrLen = (payload[1] + 2) * 4;
-      payload = payload.subarray(hdrLen);
-      next = nh;
-    } else if (next === 44){                                 // Fragment
-      return { src, dst, next, payload, fragmented: true };
-    } else break;
+      const nh = payload[0], hl = (payload[1] + 2) * 4;
+      payload = payload.subarray(hl); next = nh;
+    } else if (next === 44) return null;
+    else break;
   }
-  return { src, dst, next, payload, fragmented: false };
+  return { src, dst, next, payload };
 }
 
 function decodeTCP(d){
   if (d.length < 20) return null;
-  const sport = (d[0] << 8) | d[1];
-  const dport = (d[2] << 8) | d[3];
+  const sport = (d[0] << 8) | d[1], dport = (d[2] << 8) | d[3];
   const seq = ((d[4] << 24) | (d[5] << 16) | (d[6] << 8) | d[7]) >>> 0;
-  const ack = ((d[8] << 24) | (d[9] << 16) | (d[10] << 8) | d[11]) >>> 0;
   const doff = (d[12] >> 4) * 4;
-  const flags = d[13];
-  const win = (d[14] << 8) | d[15];
   if (doff < 20 || doff > d.length) return null;
-  return { sport, dport, seq, ack, flags, win, payload: d.subarray(doff) };
+  return { sport, dport, seq, flags: d[13], payload: d.subarray(doff) };
 }
 
 function decodeUDP(d){
   if (d.length < 8) return null;
-  const sport = (d[0] << 8) | d[1];
-  const dport = (d[2] << 8) | d[3];
+  const sport = (d[0] << 8) | d[1], dport = (d[2] << 8) | d[3];
   const len = (d[4] << 8) | d[5];
-  const end = Math.min(d.length, len || d.length);
-  return { sport, dport, len, payload: d.subarray(8, end) };
+  return { sport, dport, payload: d.subarray(8, Math.min(d.length, len || d.length)) };
 }
 
-/* ESP with auto ICV detection. Works for NULL cipher (ealg=null). */
-function decodeESP(d, icvOverride){
-  const lens = icvOverride ? [icvOverride] : [12, 16];
-  for (const icvLen of lens){
+function decodeESP(d){
+  for (const icvLen of [12, 16]){
     if (d.length < 8 + icvLen + 2) continue;
     const padLen = d[d.length - icvLen - 2];
-    const nh     = d[d.length - icvLen - 1];
-    const payloadEnd = d.length - icvLen - 2 - padLen;
-    if (payloadEnd <= 8) continue;
+    const nh = d[d.length - icvLen - 1];
+    const pEnd = d.length - icvLen - 2 - padLen;
+    if (pEnd <= 8) continue;
     if (![6, 17, 41, 50, 51, 58, 59, 60, 4, 0].includes(nh)) continue;
-    const payload = d.subarray(8, payloadEnd);
+    const payload = d.subarray(8, pEnd);
     if (nh === 6){
       if (payload.length < 20) continue;
       const doff = (payload[12] >> 4) * 4;
       if (doff < 20 || doff > payload.length) continue;
-    }
-    if (nh === 17){
+    } else if (nh === 17){
       if (payload.length < 8) continue;
       const ul = (payload[4] << 8) | payload[5];
       if (ul < 8 || ul > payload.length + 8) continue;
-    }
-    if (nh === 41){
+    } else if (nh === 41){
       if (payload.length < 40 || (payload[0] >> 4) !== 6) continue;
     }
     return {
       spi: ((d[0] << 24) | (d[1] << 16) | (d[2] << 8) | d[3]) >>> 0,
       seq: ((d[4] << 24) | (d[5] << 16) | (d[6] << 8) | d[7]) >>> 0,
-      nextHeader: nh, payload, padLen, icvLen
+      nextHeader: nh, payload, icvLen
     };
   }
   return null;
 }
 
-/* =====================================================================================
-   PART 3 — MASTER FRAME PIPELINE
-   ===================================================================================== */
-
-const TCP_FLAG_NAMES = [
-  [0x01,'FIN'],[0x02,'SYN'],[0x04,'RST'],[0x08,'PSH'],[0x10,'ACK'],[0x20,'URG'],[0x40,'ECE'],[0x80,'CWR']
-];
-function tcpFlagsStr(f){
-  return TCP_FLAG_NAMES.filter(([b]) => f & b).map(([,n]) => n).join(',') || 'none';
-}
-
-const STATIC_PT = {
-  0:'PCMU',3:'GSM',4:'G723',5:'DVI4',6:'DVI4',7:'LPC',8:'PCMA',9:'G722',
-  10:'L16',11:'L16',12:'QCELP',13:'CN',14:'MPA',15:'G728',16:'DVI4',17:'DVI4',
-  18:'G729',25:'CelB',26:'JPEG',28:'nv',31:'H261',32:'MPV',33:'MP2T',34:'H263'
-};
-
-const ESP_ICV = 'auto';   // 'auto' | 12 | 16
-
 function tryRTP(d){
   if (d.length < 12) return null;
   if ((d[0] >> 6) !== 2) return null;
-  const pad = (d[0] >> 5) & 1;
-  const ext = (d[0] >> 4) & 1;
-  const cc  = d[0] & 0x0F;
-  const marker = (d[1] >> 7) & 1;
-  const pt  = d[1] & 0x7F;
+  const pad = (d[0] >> 5) & 1, ext = (d[0] >> 4) & 1, cc = d[0] & 0x0F;
+  const marker = (d[1] >> 7) & 1, pt = d[1] & 0x7F;
   const seq = (d[2] << 8) | d[3];
-  const ts  = ((d[4] << 24) | (d[5] << 16) | (d[6] << 8) | d[7]) >>> 0;
-  const ssrc= ((d[8] << 24) | (d[9] << 16) | (d[10] << 8) | d[11]) >>> 0;
-
+  const ts = ((d[4] << 24) | (d[5] << 16) | (d[6] << 8) | d[7]) >>> 0;
+  const ssrc = ((d[8] << 24) | (d[9] << 16) | (d[10] << 8) | d[11]) >>> 0;
   let hlen = 12 + cc * 4;
   if (ext){
     if (d.length < hlen + 4) return null;
-    const extWords = (d[hlen + 2] << 8) | d[hlen + 3];
-    hlen += 4 + extWords * 4;
+    hlen += 4 + ((d[hlen + 2] << 8) | d[hlen + 3]) * 4;
   }
   if (hlen > d.length) return null;
-
-  let payloadEnd = d.length, padding = 0;
+  let pEnd = d.length;
   if (pad){
-    padding = d[payloadEnd - 1];
-    if (padding === 0 || payloadEnd - padding < hlen) return null;
-    payloadEnd -= padding;
+    const p = d[pEnd - 1];
+    if (p === 0 || pEnd - p < hlen) return null;
+    pEnd -= p;
   }
-  return {
-    marker: !!marker, pt, seq, ts, ssrc,
-    payload: d.subarray(hlen, payloadEnd),
-    cc, ext, padding
-  };
+  return { marker: !!marker, pt, seq, ts, ssrc, payload: d.subarray(hlen, pEnd) };
 }
 
-function decodeOne(p, rp, opts){
+/* =====================================================================
+   FRAME PIPELINE
+   ===================================================================== */
+function decodeOne(p, rp){
   const ll = decodeLink(rp.linktype, rp.data);
-  if (!ll){ p.proto = 'LINK?'; p.info = 'unsupported link type ' + rp.linktype; return; }
-  p.layers.push(ll.layer);
-
-  let et = ll.ethertype;
-  let payload = ll.payload;
-  let next = null;
+  if (!ll) return;
+  let et = ll.ethertype, payload = ll.payload, next = null;
 
   if (et === 0x0800){
-    const ip = decodeIPv4(payload);
-    if (!ip) return;
+    const ip = decodeIPv4(payload); if (!ip) return;
     p.src = ip.src; p.dst = ip.dst;
-    p.layers.push('IPv4');
-    if (ip.fragmented){ p.proto = 'IPv4-frag'; p.info = 'fragmented IPv4 datagram'; return; }
+    if (ip.payload.length === 0) return;
     payload = ip.payload; next = ip.protocol;
   } else if (et === 0x86DD){
-    const ip = decodeIPv6(payload);
-    if (!ip) return;
+    const ip = decodeIPv6(payload); if (!ip) return;
     p.src = ip.src; p.dst = ip.dst;
-    p.layers.push('IPv6');
-    if (ip.fragmented){ p.proto = 'IPv6-frag'; p.info = 'fragmented IPv6 datagram'; return; }
     payload = ip.payload; next = ip.next;
-  } else {
-    p.proto = 'ETH';
-    p.info = 'ethertype 0x' + et.toString(16).padStart(4,'0');
-    return;
-  }
+  } else return;
 
-  /* ---- ESP chain ---- */
   let guard = 0;
   while (next === 50 && guard++ < 4){
-    const esp = decodeESP(payload, opts.icv || null);
-    if (!esp){
-      p.proto = 'ESP';
-      p.layers.push('ESP');
-      p.info = 'ESP (payload could not be decoded — encrypted or unknown ICV length)';
-      return;
-    }
-    p.esp = { spi: esp.spi, seq: esp.seq, icvLen: esp.icvLen };
-    p.layers.push('ESP[' + esp.icvLen + ']');
-    p.info = 'ESP spi=0x' + esp.spi.toString(16) + ' seq=' + esp.seq;
+    const esp = decodeESP(payload);
+    if (!esp){ p.proto = 'ESP'; p.info = 'ESP (encrypted or unknown)'; return; }
+    p.esp = esp;
     next = esp.nextHeader;
     payload = esp.payload;
   }
 
   if (next === 6){
-    const tcp = decodeTCP(payload);
-    if (!tcp) return;
+    const tcp = decodeTCP(payload); if (!tcp) return;
     p.tcp = tcp; p.srcPort = tcp.sport; p.dstPort = tcp.dport;
-    p.layers.push('TCP');
     p.proto = 'TCP';
-    p.info = tcp.sport + ' → ' + tcp.dport + '  [' + tcpFlagsStr(tcp.flags) + ']  ' +
-             'Seq=' + tcp.seq + ' Ack=' + tcp.ack + ' Len=' + tcp.payload.length;
-  }
-  else if (next === 17){
-    const udp = decodeUDP(payload);
-    if (!udp) return;
+    p.info = tcp.sport + '→' + tcp.dport;
+  } else if (next === 17){
+    const udp = decodeUDP(payload); if (!udp) return;
     p.udp = udp; p.srcPort = udp.sport; p.dstPort = udp.dport;
-    p.layers.push('UDP');
     p.proto = 'UDP';
-    p.info = udp.sport + ' → ' + udp.dport + '  Len=' + udp.payload.length;
-
+    p.info = udp.sport + '→' + udp.dport;
     const r = tryRTP(udp.payload);
-    if (r){
-      p.rtp = r;
-      p.proto = 'RTP';
-      p.info = 'SSRC=0x' + r.ssrc.toString(16).padStart(8,'0') +
-               '  PT=' + r.pt + '  Seq=' + r.seq + '  TS=' + r.ts +
-               (r.marker ? '  MARK' : '') + '  Len=' + r.payload.length;
-    }
-  }
-  else if (next === 58){
-    p.proto = 'ICMPv6';
-    p.info = 'ICMPv6 type=' + payload[0] + ' code=' + (payload[1] || 0);
-  }
-  else if (next === 4){
-    p.proto = 'IPv4-in-IP';
-    p.info = 'IPv4 encapsulated';
-  }
-  else {
-    p.proto = 'IP-' + next;
-    p.info = 'IP next header ' + next;
+    if (r){ p.rtp = r; p.proto = 'RTP'; p.info = 'SSRC=0x' + r.ssrc.toString(16) + ' PT=' + r.pt; }
+  } else if (next === 58){
+    p.proto = 'ICMPv6'; p.info = 'ICMPv6';
+  } else {
+    p.proto = 'IP-' + next; p.info = '';
   }
 }
 
-function decodeAll(rawPackets, opts){
+function decodeAll(rawPackets){
   const out = [];
   for (let i = 0; i < rawPackets.length; i++){
     const rp = rawPackets[i];
     const p = {
-      no: i + 1, ts: rp.ts, capLen: rp.incl, origLen: rp.orig,
-      layers: [], src: '?', dst: '?', proto: '?', info: '',
-      srcPort: null, dstPort: null,
-      tcp: null, udp: null, rtp: null, esp: null, sip: null
+      no: i + 1, ts: rp.ts, capLen: rp.incl,
+      src: '?', dst: '?', proto: '?', info: '',
+      srcPort: null, dstPort: null, tcp: null, udp: null, rtp: null
     };
-    try { decodeOne(p, rp, opts); }
-    catch (e){ p.proto = 'ERR'; p.info = 'decode error: ' + e.message; }
+    try { decodeOne(p, rp); } catch(e){ p.proto = 'ERR'; p.info = e.message; }
     out.push(p);
   }
   return out;
 }
 
-/* =====================================================================================
-   PART 4 — TCP STREAM REASSEMBLY + SIP
-   ===================================================================================== */
-
+/* =====================================================================
+   TCP REASSEMBLY (for SIP only)
+   ===================================================================== */
 function reassembleTcpStreams(packets){
   const byKey = new Map();
   for (const p of packets){
-    if (!p.tcp || !p.srcPort) continue;
+    if (!p.tcp || p.srcPort == null) continue;
     const key = p.src + '|' + p.srcPort + '|' + p.dst + '|' + p.dstPort;
     if (!byKey.has(key)) byKey.set(key, []);
     byKey.get(key).push(p);
   }
-
   const streams = [];
   byKey.forEach((arr, key) => {
     arr.sort((a, b) => a.ts - b.ts);
-
-    /* base seq: prefer the SYN packet, else the first with payload */
     let base = null;
-    for (const p of arr){
-      if (p.tcp.flags & 0x02){ base = p.tcp.seq + 1; break; }
-    }
+    for (const p of arr) if (p.tcp.flags & 0x02){ base = p.tcp.seq + 1; break; }
     if (base == null){
-      const first = arr.find(p => p.tcp.payload.length);
-      if (!first) return;
-      base = first.tcp.seq;
+      const f = arr.find(p => p.tcp.payload.length);
+      if (!f) return;
+      base = f.tcp.seq;
     }
-
-    /* place payload bytes at absolute offsets, de-duplicating retransmissions */
     const chunks = [];
     const seen = new Set();
     let maxEnd = 0;
     for (const p of arr){
       const pl = p.tcp.payload;
       if (!pl.length) continue;
-      let seq = p.tcp.seq;
-      /* handle 32-bit wrap relative to base */
-      const off = ((seq - base) >>> 0);
-      if (off > 0x7FFFFFFF) continue;             // before base, ignore
-      const hash = off + ':' + pl.length;
-      if (seen.has(hash)) continue;
-      seen.add(hash);
-      chunks.push({ off, data: pl, pkt: p });
+      const off = ((p.tcp.seq - base) >>> 0);
+      if (off > 0x7FFFFFFF) continue;
+      const k = off + ':' + pl.length;
+      if (seen.has(k)) continue;
+      seen.add(k);
+      chunks.push({ off, data: pl });
       if (off + pl.length > maxEnd) maxEnd = off + pl.length;
     }
     if (!maxEnd) return;
     chunks.sort((a, b) => a.off - b.off);
-
-    /* assemble with gap markers */
     const buf = new Uint8Array(maxEnd);
-    const present = new Uint8Array(maxEnd);
-    for (const c of chunks){
-      buf.set(c.data, c.off);
-      present.fill(1, c.off, c.off + c.data.length);
-    }
-
-    streams.push({
-      key,
-      src: arr[0].src, dst: arr[0].dst,
+    for (const c of chunks) buf.set(c.data, c.off);
+    streams.push({ src: arr[0].src, dst: arr[0].dst,
       sport: arr[0].srcPort, dport: arr[0].dstPort,
-      bytes: buf, present,
-      packets: arr,
-      firstTs: arr[0].ts, lastTs: arr[arr.length - 1].ts
-    });
+      bytes: buf, packets: arr, firstTs: arr[0].ts });
   });
   return streams;
 }
 
-function extractSipMessages(packets){
-  const streams = reassembleTcpStreams(packets);
-  const messages = [];
-
-  for (const s of streams){
-    const buf = s.bytes, present = s.present;
-    let i = 0;
-    const n = buf.length;
-    while (i < n){
-      /* find a SIP start line at a message boundary */
-      const kind = sniffSipStart(buf, i);
-      if (!kind){ i++; continue; }
-
-      /* find header terminator */
-      const hdrEnd = findDoubleCrlf(buf, i);
-      if (hdrEnd < 0) break;
-
-      const headerText = latin1(buf, i, hdrEnd);
-      const clMatch = headerText.match(/\r?\nContent-Length\s*:\s*(\d+)/i);
-      const contentLen = clMatch ? +clMatch[1] : 0;
-      const bodyStart = hdrEnd;
-      const bodyEnd = bodyStart + contentLen;
-      if (bodyEnd > n) break;
-
-      const bodyText = contentLen ? latin1(buf, bodyStart, bodyEnd) : '';
-      const fullText = headerText + bodyText;
-
-      let gap = false;
-      for (let k = i; k < bodyEnd; k++){ if (!present[k]) { gap = true; break; } }
-
-      const msg = parseSipMessageText(fullText, kind);
-      msg.stream = s;
-      msg.offset = i;
-      msg.incomplete = gap;
-      msg.ts = s.firstTs;
-      messages.push(msg);
-
-      i = bodyEnd;
-    }
-  }
-
-  /* map back to packets: find the packet that carried this stream */
-  const byStream = new Map();
-  for (const m of messages){
-    if (!byStream.has(m.stream)) byStream.set(m.stream, []);
-    byStream.get(m.stream).push(m);
-  }
-  for (const [s, msgs] of byStream){
-    let idx = 0;
-    for (const p of s.packets){
-      if (!p.tcp || !p.tcp.payload.length) continue;
-      while (idx < msgs.length){
-        msgs[idx].packet = p;
-        msgs[idx].src = s.src; msgs[idx].dst = s.dst;
-        msgs[idx].srcPort = s.sport; msgs[idx].dstPort = s.dport;
-        msgs[idx].ts = p.ts;
-        msgs[idx].no = p.no;
-        idx++;
-        break;
-      }
-    }
-    /* leftover messages inherit stream endpoints */
-    while (idx < msgs.length){
-      msgs[idx].src = s.src; msgs[idx].dst = s.dst;
-      msgs[idx].srcPort = s.sport; msgs[idx].dstPort = s.dport;
-      idx++;
-    }
-  }
-
-  return messages;
-}
-
-function sniffSipStart(buf, i){
+/* =====================================================================
+   SIP / SDP
+   ===================================================================== */
+function sniffSip(buf, i){
   const head = latin1(buf, i, Math.min(i + 12, buf.length));
-  if (/^(INVITE|ACK|BYE|CANCEL|OPTIONS|REGISTER|PRACK|UPDATE|INFO|REFER|NOTIFY|MESSAGE|SUBSCRIBE|PUBLISH) /.test(head))
-    return 'request';
+  if (/^(INVITE|ACK|BYE|CANCEL|OPTIONS|REGISTER|PRACK|UPDATE|INFO|REFER|NOTIFY|MESSAGE|SUBSCRIBE|PUBLISH) /.test(head)) return 'request';
   if (head.startsWith('SIP/2.0 ')) return 'response';
   return null;
 }
-
 function findDoubleCrlf(buf, from){
   for (let i = from; i + 3 < buf.length; i++){
-    if (buf[i] === 13 && buf[i+1] === 10 && buf[i+2] === 13 && buf[i+3] === 10)
-      return i + 4;
-    if (buf[i] === 10 && buf[i+1] === 10)
-      return i + 2;
+    if (buf[i] === 13 && buf[i+1] === 10 && buf[i+2] === 13 && buf[i+3] === 10) return i + 4;
+    if (buf[i] === 10 && buf[i+1] === 10) return i + 2;
   }
   return -1;
 }
-
 function latin1(buf, a, b){
   let s = '';
   const end = Math.min(b, buf.length);
@@ -923,278 +535,285 @@ function latin1(buf, a, b){
   return s;
 }
 
+function parseSipMessagesFromStream(s, srcIp, dstIp){
+  const msgs = [];
+  const buf = s.bytes;
+  let i = 0;
+  while (i < buf.length){
+    const kind = sniffSip(buf, i);
+    if (!kind){ i++; continue; }
+    const hEnd = findDoubleCrlf(buf, i);
+    if (hEnd < 0) break;
+    const headerText = latin1(buf, i, hEnd);
+    const clMatch = headerText.match(/\r?\nContent-Length\s*:\s*(\d+)/i);
+    const cl = clMatch ? +clMatch[1] : 0;
+    const bEnd = hEnd + cl;
+    if (bEnd > buf.length) break;
+    const bodyText = cl ? latin1(buf, hEnd, bEnd) : '';
+    const text = headerText + bodyText;
+    const msgStartTs = findPacketTs(s, i);
+    const m = parseSipMessageText(text, kind);
+    m.ts = msgStartTs;
+    m.src = srcIp; m.dst = dstIp;
+    m.srcPort = s.sport; m.dstPort = s.dport;
+    msgs.push(m);
+    i = bEnd;
+  }
+  return msgs;
+}
+
+function findPacketTs(stream, byteOffset){
+  let running = 0;
+  const arr = stream.packets.slice().sort((a, b) => a.ts - b.ts);
+  if (!arr.length) return 0;
+  let base = null;
+  for (const p of arr) if (p.tcp.flags & 0x02){ base = p.tcp.seq + 1; break; }
+  if (base == null){
+    const f = arr.find(p => p.tcp.payload.length);
+    if (f) base = f.tcp.seq;
+  }
+  if (base == null) return arr[0].ts;
+  for (const p of arr){
+    if (!p.tcp.payload.length) continue;
+    const off = ((p.tcp.seq - base) >>> 0);
+    if (off <= byteOffset && byteOffset < off + p.tcp.payload.length) return p.ts;
+  }
+  return arr[0].ts;
+}
+
 function parseSipMessageText(text, kind){
   const lines = text.split(/\r?\n/);
   const start = lines[0] || '';
-  const headers = {};
-  const headerOrder = [];
+  const headers = {}, order = [];
   let i = 1;
   for (; i < lines.length; i++){
     const l = lines[i];
     if (l === '') break;
-    const m = l.match(/^([^:]+):\s*(.*)$/);
-    if (m){
-      const name = m[1].trim();
-      const value = m[2].trim();
-      const key = name.toLowerCase();
-      if (!headers[key]) { headers[key] = []; headerOrder.push(name); }
-      headers[key].push(value);
+    const mm = l.match(/^([^:]+):\s*(.*)$/);
+    if (mm){
+      const n = mm[1].trim().toLowerCase();
+      if (!headers[n]){ headers[n] = []; order.push(mm[1].trim()); }
+      headers[n].push(mm[2].trim());
     }
   }
   const body = lines.slice(i + 1).join('\n');
 
-  let label, statusCode = null, method = null, cseqMethod = null;
+  let label, method = null, statusCode = null;
   if (kind === 'request'){
-    method = start.split(' ')[0];
-    label = method;
+    method = start.split(' ')[0]; label = method;
   } else {
     const m = start.match(/^SIP\/2\.0\s+(\d{3})\s*(.*)$/);
     statusCode = m ? +m[1] : 0;
     label = statusCode + (m && m[2] ? ' ' + m[2].trim() : '');
   }
-  const cseq = (headers['cseq'] || [])[0] || '';
+  const cseq = (headers['cseq'] || [''])[0];
   const cseqM = cseq.match(/^\s*(\d+)\s+(\S+)/);
-  if (cseqM) cseqMethod = cseqM[2];
 
   const msg = {
     kind, label, method, statusCode,
-    startLine: start,
-    headers, headerOrder,
     callId: (headers['call-id'] || [''])[0],
-    cseq: cseq,
-    cseqNum: cseqM ? +cseqM[1] : null,
-    cseqMethod,
+    cseq, cseqNum: cseqM ? +cseqM[1] : null,
     from: (headers['from'] || [''])[0],
     to: (headers['to'] || [''])[0],
-    via: headers['via'] || [],
     contact: (headers['contact'] || [''])[0],
     userAgent: (headers['user-agent'] || [''])[0],
-    pai: (headers['p-asserted-identity'] || [''])[0] ||
-         (headers['p-preferred-identity'] || [''])[0] || '',
-    contentLength: headers['content-length'] ? +headers['content-length'][0] : 0,
     contentType: (headers['content-type'] || [''])[0],
     body,
     raw: text
   };
-  if (/application\/sdp/i.test(msg.contentType) || /^v=0/.test(body.trim())){
-    msg.sdp = parseSDP(body);
+  if (/application\/sdp/i.test(msg.contentType) || /^\s*v=0/.test(body)){
+    msg.sdp = parseSDP(body, msg);
   }
   return msg;
 }
 
-/* =====================================================================================
-   PART 5 — SDP
-   ===================================================================================== */
-
-function parseSDP(text){
+function parseSDP(text, owner){
   const lines = text.split(/\r?\n/);
-  const sdp = { connAddr: null, media: [], session: {} };
+  const session = {
+    owner, connAddr: null, connType: null,
+    origin: null, sessionName: null,
+    media: []
+  };
   let cur = null;
+
   for (const raw of lines){
     if (raw.length < 2 || raw[1] !== '=') continue;
-    const t = raw[0], v = raw.slice(2);
-    if (t === 'c'){
-      const m = v.match(/IN\s+IP[46]\s+(\S+)/);
-      if (m){ if (cur) cur.addr = m[1]; else sdp.connAddr = m[1]; }
-    }
-    else if (t === 'm'){
-      const parts = v.split(/\s+/);
-      cur = {
-        type: parts[0], port: +parts[1], proto: parts[2],
-        fmt: parts.slice(3), addr: null,
-        rtpmap: {}, fmtp: {}, attrs: [], dir: null
-      };
-      sdp.media.push(cur);
-    }
-    else if (t === 'a'){
-      if (cur){
+    const t = raw[0], v = raw.slice(2).trim();
+    switch (t){
+      case 'o': {
+        session.origin = v;
+        const p = v.split(/\s+/);
+        if (p.length >= 6){
+          session.originUser = p[0];
+          session.originAddr = p[5];
+        }
+        break;
+      }
+      case 's': session.sessionName = v; break;
+      case 'c': {
+        const m = v.match(/(IN)\s+(IP[46])\s+(\S+)/);
+        if (m){
+          if (cur){ cur.connAddr = m[3]; cur.connType = m[2]; }
+          else { session.connAddr = m[3]; session.connType = m[2]; }
+        }
+        break;
+      }
+      case 'm': {
+        const p = v.split(/\s+/);
+        cur = {
+          type: p[0], port: +p[1], proto: p[2],
+          fmt: p.slice(3).map(x => +x),
+          connAddr: null, connType: null,
+          rtpmap: {}, fmtp: {}, attrs: [],
+          direction: null, ptime: null, maxptime: null
+        };
+        session.media.push(cur);
+        break;
+      }
+      case 'a': {
+        if (!cur) break;
         const rm = v.match(/^rtpmap:(\d+)\s+([^/]+)\/(\d+)(?:\/(\d+))?/i);
         if (rm){
           cur.rtpmap[+rm[1]] = { name: rm[2], rate: +rm[3], ch: rm[4] ? +rm[4] : 1 };
-        } else {
-          const fm = v.match(/^fmtp:(\d+)\s+(.+)$/i);
-          if (fm) cur.fmtp[+fm[1]] = fm[2];
-          else cur.attrs.push(v);
-          if (/^(sendrecv|sendonly|recvonly|inactive)$/.test(v)) cur.dir = v;
+          break;
         }
-      } else {
-        sdp.session[v.split(':')[0]] = v;
+        const fm = v.match(/^fmtp:(\d+)\s+(.+)$/i);
+        if (fm){
+          cur.fmtp[+fm[1]] = fm[2];
+          break;
+        }
+        const pm = v.match(/^ptime:(\d+)/i); if (pm){ cur.ptime = +pm[1]; break; }
+        const mm = v.match(/^maxptime:(\d+)/i); if (mm){ cur.maxptime = +mm[1]; break; }
+        if (/^(sendrecv|sendonly|recvonly|inactive)$/.test(v)){ cur.direction = v; break; }
+        cur.attrs.push(v);
+        break;
       }
     }
   }
-  return sdp;
+  for (const m of session.media){
+    m.effectiveAddr = m.connAddr || session.connAddr;
+    m.effectiveAddrType = m.connType || session.connType;
+  }
+  return session;
 }
 
-function buildPayloadTypeMap(sipMessages){
-  /* key: addr|port  → { pt: {name, rate, ch, fmtp} } */
-  const map = new Map();
+function fmtpGet(fmtp, key){
+  if (!fmtp) return null;
+  const re = new RegExp('(?:^|;)\\s*' + key + '\\s*=\\s*([^;]+)', 'i');
+  const m = fmtp.match(re);
+  return m ? m[1].trim() : null;
+}
+function fmtpHas(fmtp, key){
+  if (!fmtp) return false;
+  return new RegExp('(?:^|;)\\s*' + key + '(?:\\s*=|\\s*(?:;|$))', 'i').test(fmtp);
+}
+
+function describeCodec(media, pt){
+  const r = media.rtpmap[pt];
+  const fmtp = media.fmtp[pt] || '';
+  if (!r) return null;
+  const name = r.name;
+  const info = {
+    pt, name: name.toUpperCase(), rate: r.rate, ch: r.ch,
+    fmtp, isAMR: /^AMR(-WB)?$/i.test(name),
+    isWB: /AMR-WB/i.test(name),
+    isDTMF: /telephone-event/i.test(name),
+    octetAlign: null, modeSet: null,
+    modeChangeCapability: null, modeChangePeriod: null, modeChangeNeighbor: null,
+    maxRed: null, robustSorting: null, crc: null, interleaving: null
+  };
+  if (info.isAMR){
+    info.octetAlign = fmtpHas(fmtp, 'octet-align')
+      ? (fmtpGet(fmtp, 'octet-align') === '1')
+      : false;
+    info.modeSet = fmtpGet(fmtp, 'mode-set');
+    info.modeChangeCapability = fmtpGet(fmtp, 'mode-change-capability');
+    info.modeChangePeriod = fmtpGet(fmtp, 'mode-change-period');
+    info.modeChangeNeighbor = fmtpGet(fmtp, 'mode-change-neighbor');
+    info.maxRed = fmtpGet(fmtp, 'max-red');
+    info.robustSorting = fmtpHas(fmtp, 'robust-sorting');
+    info.crc = fmtpHas(fmtp, 'crc');
+    info.interleaving = fmtpGet(fmtp, 'interleaving');
+  }
+  return info;
+}
+
+function collectSdpMedia(sipMessages){
+  const list = [];
   for (const m of sipMessages){
     if (!m.sdp) continue;
     for (const med of m.sdp.media){
       if (med.type !== 'audio') continue;
-      const addr = med.addr || m.sdp.connAddr;
-      if (!addr) continue;
-      const key = addr.toLowerCase() + '|' + med.port;
-      const entry = map.get(key) || {};
-      for (const f of med.fmt){
-        const pt = +f;
-        const r = med.rtpmap[pt];
-        if (r){
-          entry[pt] = { name: r.name, rate: r.rate, ch: r.ch, fmtp: med.fmtp[pt] || '' };
-        }
-      }
-      map.set(key, entry);
-    }
-  }
-  return map;
-}
-
-function resolveCodec(ptMap, addr, port, pt){
-  const key = String(addr).toLowerCase() + '|' + port;
-  const e = ptMap.get(key);
-  if (e && e[pt]) return e[pt];
-  /* try the reverse direction port as a fallback */
-  return null;
-}
-
-/* =====================================================================================
-   PART 6 — RTP STREAM ANALYSIS
-   ===================================================================================== */
-
-function clockForCodec(name, rate){
-  if (rate) return rate;
-  if (!name) return 8000;
-  const n = name.toUpperCase();
-  if (n.includes('AMR-WB')) return 16000;
-  if (n.includes('AMR'))    return 8000;
-  if (n.includes('OPUS'))   return 48000;
-  if (n.includes('TELEPHONE-EVENT')) return 8000;
-  return 8000;
-}
-
-function analyzeRtpStreams(packets, ptMap){
-  const groups = new Map();
-
-  for (const p of packets){
-    if (!p.rtp) continue;
-    const key = p.rtp.ssrc + '|' + p.src + '|' + p.srcPort + '|' + p.dst + '|' + p.dstPort + '|' + p.rtp.pt;
-    if (!groups.has(key)){
-      groups.set(key, {
-        key,
-        ssrc: p.rtp.ssrc,
-        src: p.src, dst: p.dst,
-        sport: p.srcPort, dport: p.dstPort,
-        pt: p.rtp.pt,
-        codec: null, clock: 8000, fmtp: '',
-        packets: []
+      list.push({
+        sip: m,
+        media: med,
+        addr: med.effectiveAddr,
+        port: med.port,
+        codecs: med.fmt.map(pt => describeCodec(med, pt)).filter(Boolean),
+        callId: m.callId
       });
     }
-    groups.get(key).packets.push(p);
   }
-
-  const streams = [];
-  groups.forEach(g => {
-    /* resolve codec from SDP by (dstAddr, dstPort) then (srcAddr, srcPort) */
-    let info = resolveCodec(ptMap, g.dst, g.dport, g.pt) ||
-               resolveCodec(ptMap, g.src, g.sport, g.pt);
-    if (info){
-      g.codec = info.name;
-      g.clock = clockForCodec(info.name, info.rate);
-      g.fmtp  = info.fmtp || '';
-    } else {
-      g.codec = STATIC_PT[g.pt] || ('dyn-' + g.pt);
-      g.clock = clockForCodec(g.codec, null);
-    }
-    g.octetAlign = /octet-align\s*=\s*1/i.test(g.fmtp);
-    g.ptName = g.codec;
-
-    /* sort by arrival to build extended sequence numbers */
-    g.packets.sort((a, b) => a.ts - b.ts);
-    let prevSeq = g.packets[0].rtp.seq;
-    let ext = prevSeq;
-    g.packets[0].extSeq = ext;
-    for (let i = 1; i < g.packets.length; i++){
-      const s = g.packets[i].rtp.seq;
-      let d = s - prevSeq;
-      if (d < -32768) d += 65536;
-      else if (d > 32768) d -= 65536;
-      ext += d;
-      g.packets[i].extSeq = ext;
-      prevSeq = s;
-    }
-
-    g.count = g.packets.length;
-    g.bytes = g.packets.reduce((a, p) => a + p.capLen, 0);
-    g.firstTs = g.packets[0].ts;
-    g.lastTs  = g.packets[g.packets.length - 1].ts;
-    g.arrivalSpan = g.lastTs - g.firstTs;
-
-    const seqs = g.packets.map(p => p.extSeq);
-    g.minSeq = Math.min(...seqs);
-    g.maxSeq = Math.max(...seqs);
-    g.expected = g.maxSeq - g.minSeq + 1;
-    g.lost = Math.max(0, g.expected - g.count);
-    g.lossPct = g.expected ? (g.lost / g.expected) * 100 : 0;
-
-    /* RTP timestamp span → true media duration */
-    const firstTS = g.packets[0].rtp.ts;
-    const lastTS  = g.packets[g.packets.length - 1].rtp.ts;
-    let tsSpan = (lastTS - firstTS) >>> 0;
-    g.tsSpan = tsSpan;
-
-    /* frame duration from timestamp deltas (mode) */
-    const deltas = [];
-    for (let i = 1; i < g.packets.length; i++){
-      let d = (g.packets[i].rtp.ts - g.packets[i - 1].rtp.ts) >>> 0;
-      if (d > 0 && d < 100000) deltas.push(d);
-    }
-    deltas.sort((a, b) => a - b);
-    g.frameSamples = deltas.length ? deltas[Math.floor(deltas.length / 2)] : (g.clock / 50);
-    g.mediaDuration = (tsSpan + g.frameSamples) / g.clock;
-    g.arrivalDuration = g.lastTs - g.firstTs;
-
-    /* RFC 3550 jitter */
-    let jitter = 0;
-    for (let i = 1; i < g.packets.length; i++){
-      const rDiff = (g.packets[i].ts - g.packets[i - 1].ts) * 1000;
-      const sDiff = (((g.packets[i].rtp.ts - g.packets[i - 1].rtp.ts) >>> 0) / g.clock) * 1000;
-      jitter += (Math.abs(rDiff - sDiff) - jitter) / 16;
-    }
-    g.jitter = jitter;
-    g.bitrate = g.mediaDuration > 0 ? (g.bytes * 8 / g.mediaDuration) : 0;
-
-    /* marker bits */
-    g.markers = g.packets.filter(p => p.rtp.marker).length;
-
-    /* frame-level decode */
-    g.frames = decodeStreamFrames(g);
-
-    /* gap analysis for visualisation */
-    g.gaps = computeGaps(g);
-
-    streams.push(g);
-  });
-
-  streams.sort((a, b) => b.count - a.count);
-  return streams;
+  return list;
 }
 
-function computeGaps(g){
-  const gaps = [];
-  for (let i = 1; i < g.packets.length; i++){
-    const d = g.packets[i].extSeq - g.packets[i - 1].extSeq;
-    if (d > 1) gaps.push({ after: g.packets[i - 1], before: g.packets[i], missing: d - 1 });
-    else if (d < 0) gaps.push({ after: g.packets[i - 1], before: g.packets[i], missing: 0, reorder: true });
+function correlateRTPToSDP(streams, sdpMedia){
+  for (const g of streams){
+    g.sdpMatch = null;
+    g.sdpMatchWhy = '';
+    g.sdpCandidates = [];
+
+    for (const sm of sdpMedia){
+      if (!sm.addr) continue;
+      if (sm.addr.toLowerCase() === g.dst.toLowerCase() && sm.port === g.dport){
+        for (const c of sm.codecs){
+          if (c.pt === g.pt){
+            g.sdpCandidates.push({ sm, codec: c, why: 'dst addr+port+pt' });
+          }
+        }
+      }
+      if (sm.addr.toLowerCase() === g.src.toLowerCase() && sm.port === g.sport){
+        for (const c of sm.codecs){
+          if (c.pt === g.pt){
+            g.sdpCandidates.push({ sm, codec: c, why: 'src addr+port+pt' });
+          }
+        }
+      }
+    }
+    if (!g.sdpCandidates.length){
+      for (const sm of sdpMedia){
+        if (sm.port === g.dport || sm.port === g.sport){
+          for (const c of sm.codecs){
+            if (c.pt === g.pt){
+              g.sdpCandidates.push({ sm, codec: c, why: 'port+pt (no addr match)' });
+            }
+          }
+        }
+      }
+    }
+    if (!g.sdpCandidates.length){
+      for (const sm of sdpMedia){
+        for (const c of sm.codecs){
+          if (c.pt === g.pt){
+            g.sdpCandidates.push({ sm, codec: c, why: 'pt only' });
+          }
+        }
+      }
+    }
+    if (g.sdpCandidates.length){
+      const rank = w => w === 'dst addr+port+pt' ? 0 : w === 'src addr+port+pt' ? 1 : w === 'port+pt (no addr match)' ? 2 : 3;
+      g.sdpCandidates.sort((a, b) => rank(a.why) - rank(b.why));
+      g.sdpMatch = g.sdpCandidates[0];
+      g.sdpMatchWhy = g.sdpMatch.why;
+    }
   }
-  return gaps;
 }
 
-/* ---------- AMR / AMR-WB frame extraction ---------- */
-
-const AMR_WB_BITS = [132,177,253,285,317,365,397,461,477,40,0,0,0,0,0,0];
-const AMR_NB_BITS = [95,103,118,134,148,159,204,244,39,0,0,0,0,0,0,0];
-
-const DTMF_EVENTS = ['0','1','2','3','4','5','6','7','8','9','*','#','A','B','C','D'];
+/* =====================================================================
+   AMR MODE DETECTION (fallback when no SDP)
+   ===================================================================== */
+const AMR_NB_BITS = [95, 103, 118, 134, 148, 159, 204, 244, 39, 0, 0, 0, 0, 0, 0, 0];
+const AMR_WB_BITS = [132, 177, 253, 285, 317, 365, 397, 461, 477, 40, 0, 0, 0, 0, 0, 0];
 
 class BitReader {
   constructor(bytes){ this.b = bytes; this.pos = 0; this.total = bytes.length * 8; }
@@ -1209,1026 +828,754 @@ class BitReader {
     }
     return v;
   }
-  readBitArray(n){
-    const out = new Uint8Array(Math.ceil(n / 8));
-    for (let i = 0; i < n; i++){
-      if (this.pos >= this.total) throw new Error('eof');
-      const byte = this.b[this.pos >> 3];
-      const bit = (byte >> (7 - (this.pos & 7))) & 1;
-      if (bit) out[i >> 3] |= 1 << (7 - (i & 7));
-      this.pos++;
-    }
-    return out;
-  }
-  alignByte(){ this.pos = (this.pos + 7) & ~7; }
+  get remaining(){ return this.total - this.pos; }
 }
 
-function parseAmrPayload(payload, isWB, octetAlign){
-  /* returns array of { ft, q, speech:Uint8Array } */
+function parseAMROctetAligned(payload, isWB){
   const BITS = isWB ? AMR_WB_BITS : AMR_NB_BITS;
   const frames = [];
-
-  if (!payload.length) return frames;
-
-  if (octetAlign){
-    const cmr = (payload[0] >> 4) & 0x0F;
-    let off = 1;
-    while (off < payload.length){
-      const hdr = payload[off];
-      const f = (hdr >> 7) & 1;
-      const ft = (hdr >> 3) & 0x0F;
-      const q = (hdr >> 2) & 1;
-      off++;
-      const nbits = BITS[ft] || 0;
-      const nbytes = (nbits + 7) >> 3;
-      const speech = payload.subarray(off, off + nbytes);
-      frames.push({ cmr, f, ft, q, speech: new Uint8Array(speech) });
-      off += nbytes;
-      if (nbits === 0 && ft === 15) break;
-      if (f) break;
-    }
-  } else {
-    const br = new BitReader(payload);
-    try {
-      const cmr = br.read(4);
-      let f = br.read(1);
-      while (true){
-        const ft = br.read(4);
-        const q = br.read(1);
-        const nbits = BITS[ft] || 0;
-        const speech = nbits ? br.readBitArray(nbits) : new Uint8Array(0);
-        frames.push({ cmr, f, ft, q, speech, nbits });
-        if (f) break;
-        if (br.pos + 10 > br.total) break;
-        f = br.read(1);
-      }
-    } catch (e){ /* truncated */ }
+  if (!payload.length) return { frames, ok: true };
+  const cmr = (payload[0] >> 4) & 0x0F;
+  if ((payload[0] & 0x0F) !== 0) return { frames, ok: false };
+  let off = 1;
+  while (off < payload.length){
+    const toc = payload[off];
+    const f = (toc >> 7) & 1;
+    const ft = (toc >> 3) & 0x0F;
+    const q = (toc >> 2) & 1;
+    if ((toc & 0x03) !== 0) return { frames, ok: false };
+    if (ft > 15) return { frames, ok: false };
+    if (ft === 14 && !isWB) return { frames, ok: false };
+    off++;
+    const nbits = BITS[ft];
+    const nbytes = Math.ceil(nbits / 8);
+    if (off + nbytes > payload.length) return { frames, ok: false };
+    frames.push({
+      cmr, f, ft, q,
+      speech: payload.subarray(off, off + nbytes),
+      nbits
+    });
+    off += nbytes;
+    if (f) break;
   }
-  return frames;
+  return { frames, ok: true };
 }
 
-function decodeStreamFrames(g){
-  const isWB = /WB/i.test(g.codec || '');
-  const isAmr = /AMR/i.test(g.codec || '');
-  const isDtmf = /telephone-event/i.test(g.codec || '');
-  const out = [];
-
-  for (const p of g.packets){
-    if (isDtmf){
-      const pl = p.rtp.payload;
-      if (pl.length >= 4){
-        out.push({
-          kind: 'dtmf',
-          pkt: p,
-          event: pl[0],
-          digit: DTMF_EVENTS[pl[0]] || ('e' + pl[0]),
-          end: !!(pl[1] & 0x80),
-          volume: pl[1] & 0x3F,
-          duration: (pl[2] << 8) | pl[3],
-          ts: p.rtp.ts
-        });
-      }
-      continue;
-    }
-    if (isAmr){
-      const frames = parseAmrPayload(p.rtp.payload, isWB, g.octetAlign);
-      for (const f of frames){
-        out.push({ kind: 'amr', pkt: p, ...f, ts: p.rtp.ts });
-      }
-      continue;
-    }
-    out.push({ kind: 'raw', pkt: p, payload: p.rtp.payload, ts: p.rtp.ts });
-  }
-  return out;
-}
-
-/* =====================================================================================
-   PART 7 — EXPORTERS
-   ===================================================================================== */
-
-function buildAmrFile(g){
-  const isWB = /WB/i.test(g.codec || '');
+function parseAMRBandwidthEfficient(payload, isWB){
   const BITS = isWB ? AMR_WB_BITS : AMR_NB_BITS;
+  const frames = [];
+  if (payload.length < 2) return { frames, ok: false };
+  const br = new BitReader(payload);
+  try {
+    const cmr = br.read(4);
+    let f = br.read(1);
+    while (true){
+      const ft = br.read(4);
+      const q = br.read(1);
+      if (ft === 14 && !isWB) return { frames, ok: false };
+      const nbits = BITS[ft];
+      let speech;
+      if (nbits > 0){
+        const out = new Uint8Array(Math.ceil(nbits / 8));
+        let bitpos = 0;
+        for (let i = 0; i < nbits; i++){
+          const bit = br.read(1);
+          if (bit) out[bitpos >> 3] |= 1 << (7 - (bitpos & 7));
+          bitpos++;
+        }
+        speech = out;
+      } else {
+        speech = new Uint8Array(0);
+      }
+      frames.push({ cmr, f, ft, q, speech, nbits });
+      if (f) break;
+      if (br.remaining < 10) break;
+      f = br.read(1);
+    }
+  } catch(e){ return { frames, ok: false }; }
+  return { frames, ok: true };
+}
+
+function detectAMRMode(payloads){
+  let best = null;
+  const results = [];
+
+  for (const isWB of [true, false]){
+    for (const octetAlign of [true, false]){
+      let totalFrames = 0, okPackets = 0, silentFrames = 0, speechFrames = 0;
+      const ftHist = {};
+      for (const payload of payloads.slice(0, 200)){
+        if (!payload || payload.length < 2) continue;
+        const r = octetAlign
+          ? parseAMROctetAligned(payload, isWB)
+          : parseAMRBandwidthEfficient(payload, isWB);
+        if (r.ok && r.frames.length > 0){
+          okPackets++;
+          for (const f of r.frames){
+            totalFrames++;
+            ftHist[f.ft] = (ftHist[f.ft] || 0) + 1;
+            if (f.ft === 15) silentFrames++;
+            else if (f.ft !== 9 && f.ft !== 14) speechFrames++;
+          }
+        }
+      }
+      const okRate = payloads.length ? okPackets / Math.min(payloads.length, 200) : 0;
+      results.push({
+        isWB, octetAlign, okRate, totalFrames, okPackets,
+        silentFrames, speechFrames, ftHist
+      });
+    }
+  }
+
+  for (const r of results){
+    let s = r.okRate * 100;
+    if (r.speechFrames > 0) s += 5;
+    r.score = s;
+  }
+  results.sort((a, b) => b.score - a.score);
+  best = results[0];
+
+  const ev = [];
+  ev.push(`${best.okPackets}/${Math.min(payloads.length, 200)} payloads parsed successfully ` +
+          `(${(best.okRate * 100).toFixed(0)}%)`);
+  const sortedFT = Object.entries(best.ftHist).sort((a, b) => b[1] - a[1]);
+  if (sortedFT.length){
+    ev.push('FT histogram: ' + sortedFT.slice(0, 6).map(([ft, n]) =>
+      `FT ${ft} × ${n}`).join(', '));
+  }
+  if (best.ftHist[14] != null) ev.push('FT=14 observed (only valid for AMR-WB)');
+
+  return {
+    isWB: best.isWB,
+    octetAlign: best.octetAlign,
+    confidence: Math.min(100, Math.round(best.score)),
+    evidence: ev,
+    all: results
+  };
+}
+
+/* =====================================================================
+   AMR FILE WRITER
+   ===================================================================== */
+function buildAMRFile(rtpPackets, isWB, octetAlign, frameSamples, opts = {}){
+  const replaceSid = opts.replaceSid !== false;
+  const BITS  = isWB ? AMR_WB_BITS : AMR_NB_BITS;
+  const SID_FT = isWB ? 9 : 8;
   const magic = isWB ? '#!AMR-WB\n' : '#!AMR\n';
   const out = [];
   for (let i = 0; i < magic.length; i++) out.push(magic.charCodeAt(i));
 
-  const frameDurSamples = g.frameSamples || (isWB ? 320 : 160);
-  const sorted = [...g.packets].sort((a, b) => a.extSeq - b.extSeq);
+  const sorted = [...rtpPackets].sort((a, b) => a.extSeq - b.extSeq);
+  const stats = {
+    packets: sorted.length, framesEmitted: 0,
+    speechFrames: 0, sidFrames: 0, sidReplaced: 0,
+    noDataFrames: 0, lostFrames: 0, parseErrors: 0
+  };
 
   let prevTS = null;
-  let framesWritten = 0, silenceInserted = 0, speechFrames = 0;
-
-  const noData = () => { out.push(15 << 3); framesWritten++; silenceInserted++; };
-
   for (const p of sorted){
     const ts = p.rtp.ts;
-    if (prevTS !== null){
+
+    if (prevTS != null){
       let d = (ts - prevTS) >>> 0;
-      if (d > frameDurSamples){
-        const slots = Math.round(d / frameDurSamples) - 1;
-        for (let k = 0; k < slots; k++) noData();
+      if (d > frameSamples && d < frameSamples * 500){
+        const slots = Math.round(d / frameSamples) - 1;
+        for (let i = 0; i < slots; i++){
+          out.push(0x78);
+          stats.noDataFrames++;
+          stats.framesEmitted++;
+        }
       }
     }
-    /* decode frames in this packet */
-    const frames = parseAmrPayload(p.rtp.payload, isWB, g.octetAlign);
-    for (const fr of frames){
-      if (fr.ft === 15){ noData(); continue; }
-      const nbits = BITS[fr.ft] || 0;
-      const hdr = (fr.ft << 3) | ((fr.q || 0) << 2);
-      out.push(hdr);
-      const nb = (nbits + 7) >> 3;
-      const sp = fr.speech || new Uint8Array(0);
-      for (let i = 0; i < nb; i++) out.push(sp[i] || 0);
-      framesWritten++;
-      if (fr.ft !== 9) speechFrames++;
+
+    const r = octetAlign
+      ? parseAMROctetAligned(p.rtp.payload, isWB)
+      : parseAMRBandwidthEfficient(p.rtp.payload, isWB);
+
+    if (!r.ok || !r.frames.length){
+      stats.parseErrors++;
+      prevTS = ts;
+      continue;
+    }
+
+    for (const f of r.frames){
+      if (replaceSid && f.ft === SID_FT){
+        out.push(0x78);
+        stats.sidFrames++;
+        stats.sidReplaced++;
+        stats.framesEmitted++;
+        continue;
+      }
+
+      const toc = (f.f << 7) | (f.ft << 3) | (f.q << 2);
+      out.push(toc);
+      stats.framesEmitted++;
+
+      const nbits  = BITS[f.ft];
+      const nbytes = Math.ceil(nbits / 8);
+
+      if (f.ft === 15){
+        stats.noDataFrames++;
+      } else if (f.ft === SID_FT){
+        stats.sidFrames++;
+        for (let i = 0; i < nbytes; i++) out.push(f.speech[i] || 0);
+      } else if (f.ft === 14){
+        stats.lostFrames++;
+      } else {
+        stats.speechFrames++;
+        for (let i = 0; i < nbytes; i++) out.push(f.speech[i] || 0);
+      }
     }
     prevTS = ts;
   }
 
-  return { bytes: new Uint8Array(out), framesWritten, silenceInserted, speechFrames };
+  return { bytes: new Uint8Array(out), stats, magic: magic.trim() };
 }
 
-function buildDtmfWav(events, clock){
-  /* render RFC 4733 events as a PCM16 WAV so you can hear the digits */
-  const sr = 8000;
-  if (!events.length) return null;
-  const first = events[0].ts;
-  const last  = events[events.length - 1];
-  const totalSamples = Math.max(sr,
-    Math.round(((last.ts - first) / clock) * sr) + sr);
-  const pcm = new Float32Array(totalSamples);
-  const tones = {
-    '0':[941,1336],'1':[697,1209],'2':[697,1336],'3':[697,1477],'4':[770,1209],
-    '5':[770,1336],'6':[770,1477],'7':[852,1209],'8':[852,1336],'9':[852,1477],
-    '*':[941,1209],'#':[941,1477],'A':[697,1633],'B':[770,1633],'C':[852,1633],'D':[941,1633]
+/* =====================================================================
+   RTP STREAM GROUPING
+   ===================================================================== */
+function analyzeRtpStreams(packets){
+  const groups = new Map();
+  for (const p of packets){
+    if (!p.rtp) continue;
+    const key = p.rtp.ssrc + '|' + p.src + '|' + p.srcPort + '|' + p.dst + '|' + p.dstPort + '|' + p.rtp.pt;
+    if (!groups.has(key)){
+      groups.set(key, {
+        key, ssrc: p.rtp.ssrc,
+        src: p.src, dst: p.dst, sport: p.srcPort, dport: p.dstPort,
+        pt: p.rtp.pt, packets: [], firstTs: p.ts
+      });
+    }
+    groups.get(key).packets.push(p);
+  }
+  const out = [];
+  for (const g of groups.values()){
+    g.packets.sort((a, b) => a.ts - b.ts);
+    let prev = g.packets[0].rtp.seq, ext = prev;
+    g.packets[0].extSeq = ext;
+    for (let i = 1; i < g.packets.length; i++){
+      const s = g.packets[i].rtp.seq;
+      let d = s - prev;
+      if (d < -32768) d += 65536;
+      else if (d > 32768) d -= 65536;
+      ext += d;
+      g.packets[i].extSeq = ext;
+      prev = s;
+    }
+    const seqs = g.packets.map(p => p.extSeq);
+    g.minSeq = Math.min(...seqs);
+    g.maxSeq = Math.max(...seqs);
+    g.expected = g.maxSeq - g.minSeq + 1;
+    g.lost = Math.max(0, g.expected - g.packets.length);
+    g.lossPct = g.expected ? (g.lost / g.expected * 100) : 0;
+    g.count = g.packets.length;
+    g.lastTs = g.packets[g.packets.length - 1].ts;
+    g.arrivalSpan = g.lastTs - g.firstTs;
+    out.push(g);
+  }
+  out.sort((a, b) => b.count - a.count);
+  return out;
+}
+
+/* =====================================================================
+   STREAM CLASSIFICATION
+   ===================================================================== */
+function classifyStream(g){
+  const payloads = g.packets.slice(0, 200).map(p => p.rtp.payload);
+  const sdpCodec = g.sdpMatch ? g.sdpMatch.codec : null;
+  const isDTMFFromSdp = sdpCodec && sdpCodec.isDTMF;
+  const isAMRFromSdp  = sdpCodec && sdpCodec.isAMR;
+
+  let looksDTMF = false;
+  if (!sdpCodec && payloads.length && payloads[0] && payloads[0].length === 4){
+    const ok = payloads.slice(0, 20).every(pl =>
+      pl.length === 4 && pl[0] >= 0 && pl[0] <= 15 && pl[3] === 0);
+    if (ok) looksDTMF = true;
+  }
+
+  const isDTMF = isDTMFFromSdp || looksDTMF;
+
+  if (isDTMF){
+    return {
+      codec: 'telephone-event',
+      isAMR: false, isWB: false, isDTMF: true,
+      clock: sdpCodec ? sdpCodec.rate : 8000,
+      octetAlign: null, modeSet: null, fmtp: sdpCodec ? sdpCodec.fmtp : '',
+      source: sdpCodec ? 'SDP' : 'inferred',
+      evidence: sdpCodec ? ['codec from SDP'] : ['payload shape matches RFC 4733']
+    };
+  }
+
+  const detected = detectAMRMode(payloads);
+  const isAMR = isAMRFromSdp || /^AMR/i.test(sdpCodec?.name || '') ||
+                detected.confidence > 50;
+
+  if (!isAMR){
+    return {
+      codec: sdpCodec ? sdpCodec.name : 'unknown',
+      isAMR: false, isWB: false, isDTMF: false,
+      clock: sdpCodec ? sdpCodec.rate : 8000,
+      octetAlign: null, modeSet: null, fmtp: sdpCodec ? sdpCodec.fmtp : '',
+      source: sdpCodec ? 'SDP' : 'n/a',
+      evidence: sdpCodec ? ['codec from SDP'] : ['unrecognised codec']
+    };
+  }
+
+  let isWB, octetAlign, source, evidence = [];
+
+  if (isAMRFromSdp){
+    isWB = sdpCodec.isWB;
+    octetAlign = sdpCodec.octetAlign;
+    source = 'SDP';
+    evidence.push('codec announced in SDP: ' + sdpCodec.name + ' @ ' + sdpCodec.rate + ' Hz');
+    if (sdpCodec.modeSet) evidence.push('mode-set=' + sdpCodec.modeSet);
+    if (sdpCodec.modeChangeCapability) evidence.push('mode-change-capability=' + sdpCodec.modeChangeCapability);
+    if (sdpCodec.maxRed) evidence.push('max-red=' + sdpCodec.maxRed);
+    if (sdpCodec.octetAlign !== null){
+      evidence.push('octet-align=' + (sdpCodec.octetAlign ? '1' : '0'));
+    }
+  } else {
+    isWB = detected.isWB;
+    octetAlign = detected.octetAlign;
+    source = 'inferred';
+    evidence.push('SDP not available for this stream — inferred from payload structure');
+    evidence.push('confidence: ' + detected.confidence + '%');
+    evidence = evidence.concat(detected.evidence);
+  }
+
+  const clock = isWB ? 16000 : 8000;
+
+  const deltas = [];
+  for (let i = 1; i < g.packets.length; i++){
+    let d = (g.packets[i].rtp.ts - g.packets[i - 1].rtp.ts) >>> 0;
+    if (d > 0 && d < clock * 2) deltas.push(d);
+  }
+  deltas.sort((a, b) => a - b);
+  let frameSamples = deltas.length ? deltas[Math.floor(deltas.length / 2)] : clock / 50;
+  if (frameSamples <= 0 || frameSamples > clock) frameSamples = clock / 50;
+
+  const firstTS = g.packets[0].rtp.ts;
+  const lastTS  = g.packets[g.packets.length - 1].rtp.ts;
+  const tsSpan  = (lastTS - firstTS) >>> 0;
+  const mediaDuration = (tsSpan + frameSamples) / clock;
+
+  return {
+    codec: isWB ? 'AMR-WB' : 'AMR',
+    isAMR: true, isWB, isDTMF: false,
+    clock, octetAlign, frameSamples, mediaDuration, tsSpan,
+    modeSet: sdpCodec ? sdpCodec.modeSet : null,
+    fmtp: sdpCodec ? sdpCodec.fmtp : '',
+    source, evidence,
+    sdpCodec
   };
-  /* collapse to start/end pairs per digit run */
-  const runs = [];
-  let cur = null;
-  for (const e of events){
-    const startS = Math.round(((e.ts - first) / clock) * sr);
-    if (!cur || cur.digit !== e.digit){
-      if (cur) runs.push(cur);
-      cur = { digit: e.digit, start: startS, end: startS + Math.round(e.duration / clock * sr) };
-    } else {
-      cur.end = startS + Math.round(e.duration / clock * sr);
+}
+
+/* =====================================================================
+   FRAME-TYPE STATISTICS (for explicit SID / CN / NO_DATA display)
+   ===================================================================== */
+function countFrameTypes(g, cls){
+  const SID_FT = cls.isWB ? 9 : 8;
+  let speech = 0, sid = 0, noData = 0, lost = 0, parseErr = 0, total = 0;
+  const ftHist = {};
+  for (const p of g.packets){
+    const r = cls.octetAlign
+      ? parseAMROctetAligned(p.rtp.payload, cls.isWB)
+      : parseAMRBandwidthEfficient(p.rtp.payload, cls.isWB);
+    if (!r.ok || !r.frames.length){ parseErr++; continue; }
+    for (const f of r.frames){
+      total++;
+      ftHist[f.ft] = (ftHist[f.ft] || 0) + 1;
+      if (f.ft === 15) noData++;
+      else if (f.ft === SID_FT) sid++;
+      else if (f.ft === 14) lost++;
+      else speech++;
     }
   }
-  if (cur) runs.push(cur);
-
-  for (const r of runs){
-    const t = tones[r.digit];
-    if (!t) continue;
-    const a = Math.max(0, r.start), b = Math.min(totalSamples, r.end);
-    for (let i = a; i < b; i++){
-      const x = (i - a) / sr;
-      const env = Math.min(1, Math.min((i - a) / (0.005 * sr), (b - i) / (0.005 * sr)));
-      pcm[i] += env * 0.35 * (Math.sin(2 * Math.PI * t[0] * x) + Math.sin(2 * Math.PI * t[1] * x));
-    }
-  }
-  /* to PCM16 */
-  const pcm16 = new Int16Array(totalSamples);
-  for (let i = 0; i < totalSamples; i++){
-    let v = Math.max(-1, Math.min(1, pcm[i]));
-    pcm16[i] = v * 32767;
-  }
-  return encodeWav(pcm16, sr);
+  return { speech, sid, noData, lost, parseErr, total, ftHist };
 }
 
-function encodeWav(pcm16, sampleRate){
-  const dataLen = pcm16.length * 2;
-  const buf = new ArrayBuffer(44 + dataLen);
-  const dv = new DataView(buf);
-  const ws = (o, s) => { for (let i = 0; i < s.length; i++) dv.setUint8(o + i, s.charCodeAt(i)); };
-  ws(0, 'RIFF');
-  dv.setUint32(4, 36 + dataLen, true);
-  ws(8, 'WAVE');
-  ws(12, 'fmt ');
-  dv.setUint32(16, 16, true);
-  dv.setUint16(20, 1, true);
-  dv.setUint16(22, 1, true);
-  dv.setUint32(24, sampleRate, true);
-  dv.setUint32(28, sampleRate * 2, true);
-  dv.setUint16(32, 2, true);
-  dv.setUint16(34, 16, true);
-  ws(36, 'data');
-  dv.setUint32(40, dataLen, true);
-  for (let i = 0; i < pcm16.length; i++) dv.setInt16(44 + i * 2, pcm16[i], true);
-  return new Uint8Array(buf);
+/* =====================================================================
+   ffmpeg.wasm
+   ===================================================================== */
+let ffmpegPromise = null;
+function getFFmpeg(){
+  if (ffmpegPromise) return ffmpegPromise;
+  ffmpegPromise = (async () => {
+    const { FFmpeg } = FFmpegWASM;
+    const ff = new FFmpeg();
+    await ff.load({
+      coreURL: 'https://unpkg.com/@ffmpeg/core@0.12.6/dist/umd/ffmpeg-core.js',
+      wasmURL: 'https://unpkg.com/@ffmpeg/core@0.12.6/dist/umd/ffmpeg-core.wasm'
+    });
+    return ff;
+  })();
+  return ffmpegPromise;
 }
 
-function buildStreamCsv(g){
-  const rows = [
-    'packet_no,arrival_epoch,rtp_seq,ext_seq,rtp_timestamp,marker,payload_type,payload_bytes,arrival_delta_ms,media_delta_ms,media_position_ms'
-  ];
-  const sorted = [...g.packets].sort((a, b) => a.extSeq - b.extSeq);
-  const baseTs = sorted[0].rtp.ts;
-  const baseArr = sorted[0].ts;
-  let prevArr = null, prevTs = null;
-  for (const p of sorted){
-    const arrMs = (p.ts - baseArr) * 1000;
-    const dArr = prevArr == null ? '' : ((p.ts - prevArr) * 1000).toFixed(3);
-    const dMed = prevTs == null ? '' : (((p.rtp.ts - prevTs) >>> 0) / g.clock * 1000).toFixed(3);
-    const posMs = (((p.rtp.ts - baseTs) >>> 0) / g.clock * 1000).toFixed(3);
-    rows.push([
-      p.no, p.ts.toFixed(6), p.rtp.seq, p.extSeq, p.rtp.ts,
-      p.rtp.marker ? 1 : 0, p.rtp.pt, p.rtp.payload.length,
-      dArr, dMed, posMs
-    ].join(','));
-  }
-  return rows.join('\n');
-}
-
-function downloadBlob(bytes, name, mime){
-  const blob = new Blob([bytes], { type: mime || 'application/octet-stream' });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url; a.download = name;
-  document.body.appendChild(a); a.click();
-  setTimeout(() => { URL.revokeObjectURL(url); a.remove(); }, 500);
-}
-
-function downloadText(text, name, mime){
-  downloadBlob(new TextEncoder().encode(text), name, mime || 'text/plain');
-}
-
-/* =====================================================================================
-   PART 8 — STATE + UI
-   ===================================================================================== */
-
-const state = {
-  packets: [],
-  sip: [],
-  streams: [],
-  ptMap: new Map(),
-  selectedNo: null,
-  filter: { q: '', proto: '', ep: '' },
-  filtered: [],
-  kind: ''
-};
-
-const $  = s => document.querySelector(s);
-const $$ = s => [...document.querySelectorAll(s)];
+/* =====================================================================
+   UI
+   ===================================================================== */
+const $ = s => document.querySelector(s);
 const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g,
   c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
-
-function protoClass(p){
-  const k = String(p).replace(/[^A-Za-z0-9]/g, '');
-  if (k === 'SIP' || k === 'SIPSDP') return 'p-SIP';
-  if (k === 'RTP') return 'p-RTP';
-  if (k === 'TCP') return 'p-TCP';
-  if (k === 'UDP') return 'p-UDP';
-  if (k.startsWith('ESP')) return 'p-ESP';
-  if (k === 'ICMPv6') return 'p-ICMPv6';
-  return 'p-other';
+function fmtDur(s){
+  if (!isFinite(s) || s < 0) return '—';
+  if (s < 60) return s.toFixed(3) + ' s';
+  const m = Math.floor(s / 60), r = s - m * 60;
+  return m + 'm ' + r.toFixed(2) + 's';
 }
-
-function shortIp(ip){
-  if (!ip) return '?';
-  if (ip.includes(':') && ip.length > 22){
-    const g = ip.split(':');
-    if (g.length > 5) return '…' + g.slice(-4).join(':');
-  }
-  return ip;
-}
-
 function fmtBytes(n){
   if (n < 1024) return n + ' B';
   if (n < 1048576) return (n / 1024).toFixed(1) + ' KB';
   return (n / 1048576).toFixed(2) + ' MB';
 }
-function fmtDur(sec){
-  if (!isFinite(sec)) return '—';
-  if (sec < 1) return (sec * 1000).toFixed(0) + ' ms';
-  if (sec < 60) return sec.toFixed(3) + ' s';
-  const m = Math.floor(sec / 60), s = sec - m * 60;
-  return m + 'm ' + s.toFixed(2) + 's';
-}
 
-/* ---------- loading ---------- */
+const state = { packets: [], sip: [], sdpMedia: [], streams: [], classifications: new Map() };
 
 async function loadFile(file){
-  $('#drop').innerHTML = '<div class="spinner"></div><p style="text-align:center">Decoding capture…</p>';
-  await new Promise(r => setTimeout(r, 30));
+  $('#drop').innerHTML = '<div class="spinner"></div><p style="text-align:center;color:var(--muted)">Decoding capture…</p>';
+  await new Promise(r => setTimeout(r, 40));
 
   try {
     const buf = await file.arrayBuffer();
-    const parsed = parseCaptureBuffer(buf);
-    state.kind = parsed.kind;
+    const rawPackets = parseCapture(buf);
+    if (!rawPackets.length) throw new Error('No packets found');
 
-    const rawPackets = parsed.packets;
-    if (!rawPackets.length) throw new Error('No packets found in file');
+    const packets = decodeAll(rawPackets);
 
-    /* pass 1: decode frames */
-    const packets = decodeAll(rawPackets, { icv: null });
-
-    /* pass 2: SIP (needs TCP reassembly) */
-    const sipMessages = extractSipMessages(packets);
-    attachSipToPackets(packets, sipMessages);
-
-    /* pass 3: payload type map from SDP */
-    const ptMap = buildPayloadTypeMap(sipMessages);
-
-    /* pass 4: RTP streams */
-    const streams = analyzeRtpStreams(packets, ptMap);
+    const streams = reassembleTcpStreams(packets);
+    const sip = [];
+    for (const s of streams){
+      const msgs = parseSipMessagesFromStream(s, s.src, s.dst);
+      for (const m of msgs) sip.push(m);
+    }
 
     state.packets = packets;
-    state.sip = sipMessages;
-    state.ptMap = ptMap;
-    state.streams = streams;
-    state.selectedNo = null;
-    state.filter = { q: '', proto: '', ep: '' };
+    state.sip = sip;
+    state.sdpMedia = collectSdpMedia(sip);
+    state.streams = analyzeRtpStreams(packets);
+    correlateRTPToSDP(state.streams, state.sdpMedia);
 
-    buildUI();
+    state.classifications.clear();
+    for (const g of state.streams){
+      state.classifications.set(g.key, classifyStream(g));
+    }
+
+    render(file.name);
   } catch (e){
-    $('#drop').innerHTML =
-      '<div class="errbox"><b>Could not parse the file.</b><br>' + esc(e.message) +
-      '<br><br>Supported: classic <code>.pcap</code> (all 4 magic variants) and <code>.pcapng</code>.</div>' +
-      '<p style="margin-top:16px"><button class="btn primary" id="pickBtn2">Try another file</button></p>';
+    console.error(e);
+    $('#drop').innerHTML = `
+      <div class="errbox" style="max-width:640px;margin:0 auto;text-align:left">
+        <b>Could not parse the file.</b><br>${esc(e.message)}<br><br>
+        Supported: <code>.pcap</code> (all magic variants) and <code>.pcapng</code>.
+      </div>
+      <p style="margin-top:22px"><button class="btn primary" id="pickBtn2">Try another file</button></p>`;
     const b = document.getElementById('pickBtn2');
     if (b) b.onclick = () => $('#fileInput').click();
   }
 }
 
-function attachSipToPackets(packets, sipMessages){
-  /* assign each SIP message to the packet that carried its first byte */
-  for (const m of sipMessages){
-    if (!m.packet) continue;
-    const p = m.packet;
-    if (!p.sip) p.sip = [];
-    p.sip.push(m);
-    if (!p.tcp) continue;
-    /* mark packet as SIP in the table */
-    p.proto = 'SIP';
-    const cl = m.contentType ? ' ' + m.contentType : '';
-    p.info = m.label + '  ' + m.srcPort + ' → ' + m.dstPort + '  (' + m.raw.length + ' B' + cl + ')';
-  }
-}
-
-/* ---------- UI build ---------- */
-
-function buildUI(){
+function render(fileName){
   $('#drop').hidden = true;
   $('#app').hidden = false;
-  $('#fileName').textContent =
-    state.packets.length.toLocaleString() + ' frames · ' +
-    state.kind.toUpperCase() + ' · ' + state.sip.length + ' SIP · ' + state.streams.length + ' RTP';
+  $('#fileName').textContent = fileName;
 
-  $('#cntPk').textContent = state.packets.length;
-  $('#cntSip').textContent = state.sip.length;
-  $('#cntRtp').textContent = state.streams.length;
+  const rtpN = state.streams.length;
+  const amrN = [...state.classifications.values()].filter(c => c.isAMR).length;
+  const dtmfN = [...state.classifications.values()].filter(c => c.isDTMF).length;
 
-  buildFilters();
-  applyFilter();
-  buildLadder();
-  buildRtpSummary();
-  buildAudioTab();
-  buildStats();
-  window.scrollTo(0, 0);
-}
+  let html = '';
 
-/* ---------- filters ---------- */
+  html += `<div class="summary">
+    <div class="stat"><div class="l">Frames</div><div class="v">${state.packets.length}</div></div>
+    <div class="stat"><div class="l">RTP streams</div><div class="v">${rtpN}</div></div>
+    <div class="stat"><div class="l">AMR streams</div><div class="v">${amrN}</div></div>
+    <div class="stat"><div class="l">DTMF streams</div><div class="v">${dtmfN}</div></div>
+  </div>`;
 
-function buildFilters(){
-  const protos = [...new Set(state.packets.map(p => p.proto))].sort();
-  $('#protoSel').innerHTML = '<option value="">All protocols</option>' +
-    protos.map(p => `<option value="${esc(p)}">${esc(p)}</option>`).join('');
-
-  const eps = new Set();
-  for (const p of state.packets){ eps.add(p.src); eps.add(p.dst); }
-  const list = [...eps].sort();
-  $('#epSel').innerHTML = '<option value="">All endpoints</option>' +
-    list.map(e => `<option value="${esc(e)}">${esc(shortIp(e))}</option>`).join('');
-
-  const quick = ['SIP', 'RTP', 'ESP', 'TCP', 'UDP', 'INVITE', 'PRACK', 'UPDATE', '183', '180', '200 OK', 'ACK'];
-  $('#chips').innerHTML = quick.map(q => `<button class="chip" data-q="${esc(q)}">${esc(q)}</button>`).join('');
-  $$('#chips .chip').forEach(c => c.onclick = () => {
-    const v = c.dataset.q;
-    const box = $('#q');
-    box.value = (box.value.trim().toLowerCase() === v.toLowerCase()) ? '' : v;
-    state.filter.q = box.value;
-    applyFilter();
-  });
-}
-
-function applyFilter(){
-  const f = state.filter;
-  const q = f.q.trim().toLowerCase();
-  state.filtered = state.packets.filter(p => {
-    if (f.proto && p.proto !== f.proto) return false;
-    if (f.ep && p.src !== f.ep && p.dst !== f.ep) return false;
-    if (q){
-      let hay = (p.no + ' ' + p.ts + ' ' + p.src + ' ' + p.dst + ' ' + p.proto + ' ' + p.info).toLowerCase();
-      if (p.rtp) hay += ' ssrc=' + p.rtp.ssrc.toString(16) + ' pt=' + p.rtp.pt + ' seq=' + p.rtp.seq;
-      if (p.sip) hay += ' ' + p.sip.map(m => m.label).join(' ');
-      if (!hay.includes(q)) return false;
-    }
-    return true;
-  });
-  renderTable();
-  $$('#chips .chip').forEach(c =>
-    c.classList.toggle('on', c.dataset.q.toLowerCase() === q));
-}
-
-$('#q').addEventListener('input', e => { state.filter.q = e.target.value; applyFilter(); });
-$('#protoSel').addEventListener('change', e => { state.filter.proto = e.target.value; applyFilter(); });
-$('#epSel').addEventListener('change', e => { state.filter.ep = e.target.value; applyFilter(); });
-$('#clearBtn').onclick = () => {
-  state.filter = { q: '', proto: '', ep: '' };
-  $('#q').value = ''; $('#protoSel').value = ''; $('#epSel').value = '';
-  applyFilter();
-};
-
-/* ---------- packets table ---------- */
-
-const MAX_ROWS = 5000;
-function renderTable(){
-  const rows = state.filtered;
-  const shown = rows.slice(0, MAX_ROWS);
-  $('#tbody').innerHTML = shown.map(p => {
-    const sel = p.no === state.selectedNo ? ' class="sel"' : '';
-    const pai = (p.sip && p.sip[0] && p.sip[0].pai) ? p.sip[0].pai : '';
-    return `<tr data-no="${p.no}"${sel}>
-      <td class="no">${p.no}</td>
-      <td class="time">${esc(new Date(p.ts * 1000).toISOString().substr(11, 12))}</td>
-      <td class="ip" title="${esc(p.src)}">${esc(shortIp(p.src))}</td>
-      <td class="ip" title="${esc(p.dst)}">${esc(shortIp(p.dst))}</td>
-      <td class="proto"><span class="tag ${protoClass(p.proto)}">${esc(p.proto)}</span></td>
-      <td class="len">${p.capLen}</td>
-      <td class="info">${esc(p.info)}${pai ? '<div class="pai">P-Asserted-Identity: ' + esc(pai) + '</div>' : ''}</td>
-    </tr>`;
-  }).join('') || '<tr><td colspan="7" class="empty">No packets match the current filter.</td></tr>';
-
-  $('#hint').textContent = rows.length === state.packets.length
-    ? rows.length.toLocaleString() + ' frames'
-    : rows.length.toLocaleString() + ' / ' + state.packets.length.toLocaleString() + ' shown' +
-      (rows.length > MAX_ROWS ? ' (first ' + MAX_ROWS + ')' : '');
-
-  $$('#tbody tr[data-no]').forEach(tr => tr.onclick = () => selectPacket(+tr.dataset.no));
-}
-
-function selectPacket(no){
-  state.selectedNo = no;
-  $$('#tbody tr').forEach(tr => tr.classList.toggle('sel', +tr.dataset.no === no));
-  const p = state.packets.find(x => x.no === no);
-  if (!p) return;
-  renderDetail(p);
-}
-
-function renderDetail(p){
-  const kv = [
-    ['Frame', p.no],
-    ['Time', new Date(p.ts * 1000).toISOString().replace('T', ' ').replace('Z', '')],
-    ['Source', p.src + (p.srcPort != null ? ':' + p.srcPort : '')],
-    ['Destination', p.dst + (p.dstPort != null ? ':' + p.dstPort : '')],
-    ['Protocol', p.proto],
-    ['Captured', p.capLen + ' bytes'],
-    ['Layers', p.layers.join(' › ')]
-  ];
-  if (p.esp){
-    kv.push(['ESP SPI', '0x' + p.esp.spi.toString(16)]);
-    kv.push(['ESP Seq', p.esp.seq]);
-    kv.push(['ESP ICV', p.esp.icvLen + ' bytes']);
+  if (!state.sdpMedia.length && amrN > 0){
+    html += `<div class="warnbox">
+      <b>No SDP found in this capture.</b> AMR mode (AMR-NB vs AMR-WB) and alignment
+      (octet-aligned vs bandwidth-efficient) were inferred from the RTP payload structure.
+      Check the per-stream readout below before trusting the output.
+    </div>`;
   }
-  if (p.rtp){
-    kv.push(['RTP SSRC', '0x' + p.rtp.ssrc.toString(16).padStart(8, '0')]);
-    kv.push(['RTP PT', p.rtp.pt]);
-    kv.push(['RTP Seq', p.rtp.seq]);
-    kv.push(['RTP Timestamp', p.rtp.ts]);
-    if (p.rtp.marker) kv.push(['Marker', 'true']);
-    kv.push(['Payload', p.rtp.payload.length + ' bytes']);
-  }
-  if (p.sip){
-    for (const m of p.sip){
-      kv.push(['SIP', m.label]);
-      if (m.callId) kv.push(['Call-ID', m.callId]);
-      if (m.cseq)   kv.push(['CSeq', m.cseq]);
-      if (m.pai)    kv.push(['P-Asserted-Identity', m.pai]);
-      if (m.userAgent) kv.push(['User-Agent', m.userAgent]);
+
+  html += `<section><h2>RTP Streams <span class="badge">${state.streams.length}</span></h2>`;
+  if (!state.streams.length){
+    html += `<div class="card"><div class="hint">No RTP streams found.</div></div>`;
+  } else {
+    let idx = 0;
+    for (const g of state.streams){
+      idx++;
+      const cls = state.classifications.get(g.key);
+      html += renderStreamCard(g, cls, idx);
     }
   }
+  html += `</section>`;
 
-  let extra = '';
-  if (p.rtp && p.rtp.payload.length){
-    extra = '<div style="padding:12px 14px;border-bottom:1px solid var(--border)">' +
-      '<div style="color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px">RTP payload (hex)</div>' +
-      '<pre class="frame" style="padding:0;max-height:220px">' + esc(hexDump(p.rtp.payload)) + '</pre></div>';
+  $('#content').innerHTML = html;
+
+  let i = 0;
+  for (const g of state.streams){
+    i++;
+    const cls = state.classifications.get(g.key);
+    const btn = document.getElementById('extract-' + i);
+    if (btn && cls.isAMR){
+      btn.onclick = () => extractAMR(g, cls, i);
+    }
+    const conv = document.getElementById('convert-' + i);
+    if (conv && cls.isAMR){
+      conv.onclick = () => convertToWav(g, cls, i);
+    }
+    const peek = document.getElementById('peek-' + i);
+    if (peek){
+      peek.onclick = () => {
+        const el = document.getElementById('peekbody-' + i);
+        el.hidden = !el.hidden;
+        peek.textContent = el.hidden ? 'Show first 3 payloads' : 'Hide payloads';
+      };
+    }
   }
+}
 
-  $('#detailPane').innerHTML = `
-    <div class="detail-head">
-      <div>
-        <div class="t">Frame ${p.no} · ${esc(p.proto)}</div>
-        <div class="s">${esc(shortIp(p.src))} → ${esc(shortIp(p.dst))}</div>
+function renderStreamCard(g, cls, i){
+  const ext = cls.isAMR ? (cls.isWB ? 'awb' : 'amr') : '';
+  const sdpLine = g.sdpMatch
+    ? `<span class="tag ok">SDP: PT ${g.sdpMatch.codec.pt} ${esc(g.sdpMatch.codec.name)}</span>`
+    : (state.sdpMedia.length
+        ? '<span class="tag err">no SDP match</span>'
+        : '<span class="tag warn">SDP absent</span>');
+
+  const srcTag = cls.isAMR
+    ? (cls.source === 'SDP'
+        ? '<span class="tag info">mode from SDP</span>'
+        : '<span class="tag warn">mode inferred</span>')
+    : '';
+
+  let html = `<div class="card">
+    <h3>Stream ${i}
+      <span class="tag">SSRC 0x${g.ssrc.toString(16).padStart(8, '0')}</span>
+      <span class="tag">PT ${g.pt}</span>
+      <span class="tag">${g.count} pkts</span>
+      ${sdpLine} ${srcTag}
+    </h3>
+    <dl class="kv">
+      <dt>Endpoints</dt><dd>${esc(g.src)}:${g.sport} → ${esc(g.dst)}:${g.dport}</dd>
+      <dt>Codec</dt><dd>${esc(cls.codec || 'unknown')}</dd>
+      ${cls.isAMR ? `
+        <dt>Clock</dt><dd>${cls.clock} Hz</dd>
+        <dt>Frame size</dt><dd>${cls.frameSamples} samples (${(cls.frameSamples / cls.clock * 1000).toFixed(1)} ms)</dd>
+        <dt>Media duration</dt><dd style="color:#a3e6b8">${fmtDur(cls.mediaDuration)}</dd>
+        <dt>Lost packets</dt><dd>${g.lost} (${g.lossPct.toFixed(2)}%)</dd>
+      ` : ''}
+    </dl>`;
+
+  if (cls.isAMR){
+    const ft = countFrameTypes(g, cls);
+    const sidLabel = cls.isWB ? 'SID / comfort noise (FT 9)' : 'SID / comfort noise (FT 8)';
+
+    html += `<div class="grid2" style="margin-top:12px">
+      <div class="panelbox">
+        <h4>Mode &amp; Alignment</h4>
+        <div class="frow"><span class="k">Codec</span>
+          <span class="v" style="color:#8cc3ff">${esc(cls.codec)}</span></div>
+        <div class="frow"><span class="k">Alignment</span>
+          <span class="v">${cls.octetAlign
+            ? '<span class="tag warn big">octet-aligned</span>'
+            : '<span class="tag ok big">bandwidth-efficient</span>'}</span></div>
+        <div class="frow"><span class="k">Clock</span>
+          <span class="v">${cls.clock} Hz</span></div>
+        <div class="frow"><span class="k">Mode source</span>
+          <span class="v">${esc(cls.source)}</span></div>
+        ${cls.modeSet ? `<div class="frow"><span class="k">mode-set</span>
+          <span class="v">${esc(cls.modeSet)}</span></div>` : ''}
       </div>
-      <button class="btn" id="copyBtn">Copy info</button>
+      <div class="panelbox">
+        <h4>Frame breakdown (all packets)</h4>
+        <div class="frow"><span class="k">Speech frames</span>
+          <span class="v">${ft.speech}</span></div>
+        <div class="frow"><span class="k">${esc(sidLabel)}</span>
+          <span class="v" style="color:#e5b955">${ft.sid}</span></div>
+        <div class="frow"><span class="k">NO_DATA (FT 15)</span>
+          <span class="v">${ft.noData}</span></div>
+        <div class="frow"><span class="k">Lost / no-data (FT 14)</span>
+          <span class="v">${ft.lost}</span></div>
+        <div class="frow"><span class="k">Parse errors</span>
+          <span class="v" style="color:${ft.parseErr ? 'var(--err)' : 'var(--muted)'}">${ft.parseErr}</span></div>
+        <div class="frow"><span class="k">Total frames</span>
+          <span class="v">${ft.total}</span></div>
+      </div>
+    </div>`;
+
+    html += `<div style="margin-top:10px;font-size:12px;color:var(--muted)">
+      <b style="color:var(--text)">Mode evidence:</b><br>
+      ${cls.evidence.map(e => '· ' + esc(e)).join('<br>')}
+    </div>`;
+
+    html += `<div class="actions">
+      <button class="btn ok" id="extract-${i}">Download stream-${i}.${ext}</button>
+      <button class="btn primary" id="convert-${i}">Convert to WAV (ffmpeg.wasm)</button>
+      <button class="btn" id="peek-${i}">Show first 3 payloads</button>
     </div>
-    <dl class="kv">${kv.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join('')}</dl>
-    ${extra}`;
-  $('#copyBtn').onclick = () => {
-    navigator.clipboard.writeText(kv.map(([k, v]) => k + ': ' + v).join('\n')).then(() => {
-      $('#copyBtn').textContent = 'Copied';
-      setTimeout(() => $('#copyBtn').textContent = 'Copy info', 1200);
-    });
-  };
+    <div id="peekbody-${i}" hidden style="margin-top:10px">
+      ${g.packets.slice(0, 3).map((p, k) => `
+        <div style="margin-bottom:8px">
+          <div style="color:var(--muted);font-size:11px;margin-bottom:3px">
+            Packet #${p.no} · seq ${p.rtp.seq} · ts ${p.rtp.ts} · ${p.rtp.payload.length} payload bytes
+          </div>
+          <div class="bytes">${esc(hexLines(p.rtp.payload))}</div>
+        </div>`).join('')}
+    </div>
+    <div id="report-${i}" style="margin-top:10px;font-size:12px"></div>`;
+  } else if (cls.isDTMF){
+    html += `<div class="infobox" style="margin-top:10px">
+      DTMF stream (RFC 4733 telephone-event). Not an AMR audio stream — no extraction.
+    </div>`;
+  } else {
+    html += `<div class="infobox" style="margin-top:10px">
+      Non-AMR codec. No extraction available.
+    </div>`;
+  }
+
+  html += `</div>`;
+  return html;
 }
 
-function hexDump(bytes, maxBytes){
-  const limit = Math.min(bytes.length, maxBytes || 512);
+function hexLines(bytes){
   const lines = [];
-  for (let i = 0; i < limit; i += 16){
-    const chunk = bytes.subarray(i, Math.min(i + 16, limit));
-    let hex = '', asc = '';
+  for (let i = 0; i < bytes.length && i < 96; i += 16){
+    const chunk = bytes.subarray(i, Math.min(i + 16, bytes.length));
+    let h = '', a = '';
     for (let j = 0; j < 16; j++){
-      hex += j < chunk.length ? chunk[j].toString(16).padStart(2, '0') + ' ' : '   ';
-      if (j < chunk.length) asc += (chunk[j] >= 32 && chunk[j] < 127) ? String.fromCharCode(chunk[j]) : '.';
+      if (j < chunk.length){
+        h += chunk[j].toString(16).padStart(2, '0') + ' ';
+        a += (chunk[j] >= 32 && chunk[j] < 127) ? String.fromCharCode(chunk[j]) : '.';
+      } else { h += '   '; a += ' '; }
     }
-    lines.push(i.toString(16).padStart(6, '0') + '  ' + hex + ' ' + asc);
+    lines.push(i.toString(16).padStart(4, '0') + '  ' + h + ' ' + a);
   }
-  if (bytes.length > limit) lines.push('… (' + (bytes.length - limit) + ' more bytes)');
+  if (bytes.length > 96) lines.push('… (' + (bytes.length - 96) + ' more bytes)');
   return lines.join('\n');
 }
 
-/* ---------- SIP ladder ---------- */
+/* ---- Extract .amr / .awb ---- */
+function extractAMR(g, cls, idx){
+  const rep = document.getElementById('report-' + idx);
+  rep.innerHTML = '<span style="color:var(--muted)">Building file…</span>';
 
-const SIP_COLORS = {
-  INVITE:'#4ade80', ACK:'#a78bfa', PRACK:'#f472b6', UPDATE:'#fbbf24',
-  BYE:'#f87171', CANCEL:'#f87171', OPTIONS:'#22d3ee', INFO:'#22d3ee',
-  REFER:'#22d3ee', NOTIFY:'#22d3ee', MESSAGE:'#22d3ee', REGISTER:'#818cf8',
-  SUBSCRIBE:'#818cf8', PUBLISH:'#818cf8'
-};
-function sipColor(m){
-  if (SIP_COLORS[m.label]) return SIP_COLORS[m.label];
-  if (m.statusCode){
-    const c = Math.floor(m.statusCode / 100);
-    if (c === 1) return '#60a5fa';
-    if (c === 2) return '#34d399';
-    if (c === 3) return '#fbbf24';
-    return '#f87171';
-  }
-  return '#94a3b8';
-}
+  try {
+    const built = buildAMRFile(g.packets, cls.isWB, cls.octetAlign, cls.frameSamples, { replaceSid: true });
+    const ext = cls.isWB ? 'awb' : 'amr';
+    const name = `stream-${idx}-ssrc-${g.ssrc.toString(16)}.${ext}`;
+    const blob = new Blob([built.bytes], { type: 'audio/amr' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = name;
+    document.body.appendChild(a); a.click();
+    setTimeout(() => { URL.revokeObjectURL(url); a.remove(); }, 400);
 
-function buildLadder(){
-  const msgs = state.sip;
-  if (!msgs.length){
-    $('#ladderWrap').innerHTML = '<div class="empty">No SIP messages could be reconstructed from this capture.</div>';
-    $('#callInfo').innerHTML = '<div class="empty">—</div>';
-    return;
-  }
-  /* order by time, then by cseq */
-  msgs.sort((a, b) => (a.ts - b.ts) || ((a.cseqNum || 0) - (b.cseqNum || 0)));
-
-  const laneIdx = new Map(), lanes = [];
-  for (const m of msgs){
-    for (const ip of [m.src, m.dst]){
-      if (!laneIdx.has(ip)){ laneIdx.set(ip, lanes.length); lanes.push(ip); }
-    }
-  }
-
-  const laneW = 180, rowH = 60, top = 70, padR = 80;
-  const W = Math.max(700, lanes.length * laneW + padR);
-  const H = top + msgs.length * rowH + 40;
-  const X = i => i * laneW + laneW / 2 + 20;
-
-  let s = `<svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" xmlns="http://www.w3.org/2000/svg">
-    <defs>
-      <marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7"
-        orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="context-stroke"/></marker>
-    </defs>`;
-
-  lanes.forEach((ip, i) => {
-    const x = X(i);
-    s += `<line x1="${x}" y1="${top - 20}" x2="${x}" y2="${H - 20}" stroke="#25313f" stroke-dasharray="3 5"/>`;
-    s += `<rect x="${x - 84}" y="12" width="168" height="36" rx="9" fill="#141b24" stroke="#25313f"/>`;
-    s += `<text x="${x}" y="28" text-anchor="middle" fill="#8b98a8" font-size="10" font-family="monospace">${esc(ip.length > 27 ? '…' + ip.slice(-24) : ip)}</text>`;
-    s += `<text x="${x}" y="41" text-anchor="middle" fill="#4d5b6b" font-size="9">lane ${i + 1}</text>`;
-  });
-
-  msgs.forEach((m, i) => {
-    const a = laneIdx.get(m.src), b = laneIdx.get(m.dst);
-    const x1 = X(a), x2 = X(b);
-    const y = top + i * rowH;
-    const col = sipColor(m);
-
-    if (a === b){
-      s += `<circle cx="${x1}" cy="${y}" r="7" fill="none" stroke="${col}" stroke-width="2.4"/>`;
-    } else {
-      s += `<line x1="${x1}" y1="${y}" x2="${x2}" y2="${y}" stroke="${col}" stroke-width="2.2"
-        marker-end="url(#ah)"/>`;
-    }
-    const label = (m.no ? m.no + '. ' : '') + m.label;
-    const mid = (x1 + x2) / 2;
-    const tw = Math.max(64, label.length * 6.6);
-    s += `<rect x="${mid - tw / 2}" y="${y - 26}" width="${tw}" height="18" rx="5"
-      fill="#0f151c" opacity="0.94"/>`;
-    s += `<text x="${mid}" y="${y - 12}" text-anchor="middle" fill="${col}" font-size="11.5"
-      font-weight="600" font-family="ui-monospace,monospace">${esc(label)}</text>`;
-    if (m.pai){
-      s += `<text x="${mid}" y="${y + 13}" text-anchor="middle" fill="#7ea6d8" font-size="9.5"
-        font-family="monospace">PAI ${esc(m.pai.replace(/^<sip:|>.*$/g, ''))}</text>`;
-    }
-    s += `<title>${esc('#' + m.no + '  ' + m.label + '   ' + m.src + ' → ' + m.dst +
-      (m.cseq ? '   CSeq ' + m.cseq : ''))}</title>`;
-  });
-
-  s += '</svg>';
-  $('#ladderWrap').innerHTML = s;
-
-  const used = [...new Set(msgs.map(m => m.label))];
-  $('#ladderLegend').innerHTML = used.map(l =>
-    `<span><i style="background:${sipColor({ label: l })}"></i>${esc(l)}</span>`).join('');
-
-  /* call detail panel */
-  const firstInvite = msgs.find(m => m.method === 'INVITE');
-  const callId = firstInvite ? firstInvite.callId : (msgs[0].callId || '—');
-  const from = msgs[0].from || '—';
-  const to = msgs[0].to || '—';
-  const agents = [...new Set(msgs.map(m => m.userAgent).filter(Boolean))];
-
-  $('#callInfo').innerHTML = `
-    <dl class="kv" style="border:none;padding:0">
-      <dt>Call-ID</dt><dd>${esc(callId)}</dd>
-      <dt>From</dt><dd>${esc(from)}</dd>
-      <dt>To</dt><dd>${esc(to)}</dd>
-      <dt>Messages</dt><dd>${msgs.length}</dd>
-      <dt>Devices</dt><dd>${agents.map(esc).join('<br>') || '—'}</dd>
-      <dt>First message</dt><dd>#${msgs[0].no || '—'}  ${esc(msgs[0].label)}  @ ${fmtDur(msgs[0].ts - msgs[0].ts)}</dd>
-    </dl>`;
-}
-
-/* ---------- RTP summary ---------- */
-
-function buildRtpSummary(){
-  if (!state.streams.length){
-    $('#rtpSummary').innerHTML = '<div class="empty">No RTP streams detected.</div>';
-    return;
-  }
-  let html = `<table class="mini"><thead><tr>
-    <th>SSRC</th><th>Direction</th><th>Codec</th><th>PT</th><th>Packets</th>
-    <th>Media dur.</th><th>Lost</th><th>Jitter</th><th>Bitrate</th></tr></thead><tbody>`;
-
-  state.streams.forEach((g, i) => {
-    html += `<tr data-idx="${i}">
-      <td>0x${g.ssrc.toString(16).padStart(8, '0')}</td>
-      <td title="${esc(g.src + ':' + g.sport + ' → ' + g.dst + ':' + g.dport)}">
-        ${esc(shortIp(g.src))}:${g.sport} → ${esc(shortIp(g.dst))}:${g.dport}</td>
-      <td>${esc(g.codec)}${g.octetAlign ? ' <span style="color:#d29922">[octet-align]</span>' : ''}</td>
-      <td>${g.pt}</td>
-      <td>${g.count}</td>
-      <td>${fmtDur(g.mediaDuration)}</td>
-      <td style="color:${g.lost ? 'var(--err)' : 'var(--ok)'}">${g.lost} (${g.lossPct.toFixed(1)}%)</td>
-      <td>${g.jitter.toFixed(2)} ms</td>
-      <td>${(g.bitrate / 1000).toFixed(1)} kbps</td>
-    </tr>`;
-  });
-  html += '</tbody></table>';
-  $('#rtpSummary').innerHTML = html;
-
-  $$('#rtpSummary tr[data-idx]').forEach(tr =>
-    tr.onclick = () => showRtpDetail(state.streams[+tr.dataset.idx]));
-}
-
-function showRtpDetail(g){
-  const card = $('#rtpDetailCard');
-  card.hidden = false;
-
-  const dtmfEvents = g.frames.filter(f => f.kind === 'dtmf');
-  const amrFrames  = g.frames.filter(f => f.kind === 'amr');
-  const ftHistogram = {};
-  for (const f of amrFrames) ftHistogram[f.ft] = (ftHistogram[f.ft] || 0) + 1;
-
-  const FT_NAMES_WB = {
-    0:'6.60 kbps',1:'8.85',2:'12.65',3:'14.25',4:'15.85',5:'18.25',
-    6:'19.85',7:'23.05',8:'23.85',9:'SID (comfort noise)',14:'speech lost',15:'no data'
-  };
-  const FT_NAMES_NB = {
-    0:'4.75 kbps',1:'5.15',2:'5.90',3:'6.70',4:'7.40',5:'7.95',
-    6:'10.2',7:'12.2',8:'SID (comfort noise)',15:'no data'
-  };
-  const isWB = /WB/i.test(g.codec || '');
-  const FT_NAMES = isWB ? FT_NAMES_WB : FT_NAMES_NB;
-
-  let gapRows = '';
-  if (g.gaps.length){
-    gapRows = g.gaps.slice(0, 40).map(gp => {
-      const after = gp.after;
-      const before = gp.before;
-      const mediaDelta = (((before.rtp.ts - after.rtp.ts) >>> 0) / g.clock * 1000).toFixed(1);
-      const arrDelta = ((before.ts - after.ts) * 1000).toFixed(1);
-      return `<div class="rowline">
-        <span class="n">#${after.no}→${before.no}</span>
-        <span class="g">seq ${after.rtp.seq} → ${before.rtp.seq} (${gp.missing} missing)</span>
-        <span class="v" style="color:var(--warn)">${mediaDelta} ms media / ${arrDelta} ms wall</span>
+    const totalDuration = built.stats.framesEmitted * (cls.frameSamples / cls.clock);
+    rep.innerHTML = `
+      <div class="okbox">
+        <b>${esc(name)}</b> written — ${fmtBytes(built.bytes.length)}<br>
+        Frames: <b>${built.stats.framesEmitted}</b> =
+          ${built.stats.speechFrames} speech
+          + ${built.stats.sidReplaced} SID→NO_DATA
+          + ${built.stats.noDataFrames} NO_DATA
+          ${built.stats.lostFrames ? '+ ' + built.stats.lostFrames + ' lost' : ''}<br>
+        ${built.stats.parseErrors ? `<b style="color:var(--warn)">${built.stats.parseErrors} payloads failed to parse</b><br>` : ''}
+        Duration: <b>${fmtDur(totalDuration)}</b>
+        (RTP timestamps say ${fmtDur(cls.mediaDuration)})
       </div>`;
-    }).join('');
-    if (g.gaps.length > 40) gapRows += `<div class="rowline"><span class="g">… and ${g.gaps.length - 40} more</span></div>`;
-  } else {
-    gapRows = '<div style="color:var(--muted);font-size:12.5px">No sequence gaps detected — perfect stream.</div>';
+  } catch(e){
+    rep.innerHTML = `<div class="errbox">Extraction failed: ${esc(e.message)}</div>`;
   }
-
-  card.innerHTML = `
-    <h3>Stream 0x${g.ssrc.toString(16).padStart(8, '0')} · ${esc(g.codec)}</h3>
-    <div class="statsrow">
-      <div class="statbox"><div class="l">Packets</div><div class="v">${g.count}</div></div>
-      <div class="statbox"><div class="l">Media duration</div><div class="v">${fmtDur(g.mediaDuration)}</div></div>
-      <div class="statbox"><div class="l">Arrival span</div><div class="v">${fmtDur(g.arrivalDuration)}</div></div>
-      <div class="statbox"><div class="l">Lost</div>
-        <div class="v ${g.lost ? 'err' : 'ok'}">${g.lost}</div></div>
-      <div class="statbox"><div class="l">Jitter</div><div class="v">${g.jitter.toFixed(2)} ms</div></div>
-      <div class="statbox"><div class="l">Bitrate</div><div class="v">${(g.bitrate / 1000).toFixed(1)} kbps</div></div>
-    </div>
-    <div class="scrollx" style="margin-bottom:10px">
-      <table class="mini" style="width:auto">
-        <thead><tr><th>Clock</th><th>Frame size</th><th>Payload bytes</th>
-          <th>Marker bits</th><th>Mode</th><th>First frame</th></tr></thead>
-        <tbody><tr>
-          <td>${g.clock} Hz</td>
-          <td>${g.frameSamples} samples (${(g.frameSamples / g.clock * 1000).toFixed(1)} ms)</td>
-          <td>${fmtBytes(g.bytes)}</td>
-          <td>${g.markers}</td>
-          <td>${g.octetAlign ? 'octet-aligned' : 'bandwidth-efficient'}</td>
-          <td>#${g.packets[0].no} @ ${new Date(g.packets[0].ts * 1000).toISOString().substr(11, 12)}</td>
-        </tr></tbody>
-      </table>
-    </div>
-
-    <h4 style="margin:14px 0 6px;font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px">
-      Frame type histogram</h4>
-    <div>${Object.entries(ftHistogram).sort((a, b) => +a[0] - +b[0]).map(([ft, n]) =>
-      `<div class="rowline"><span class="n">FT ${ft}</span>
-        <span class="g">${esc(FT_NAMES[ft] || 'unknown')}</span>
-        <span class="v">${n}</span></div>`).join('') || '<span style="color:var(--muted)">—</span>'}
-    </div>
-
-    ${dtmfEvents.length ? `
-      <h4 style="margin:14px 0 6px;font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px">
-        DTMF events</h4>
-      <div>${dtmfEvents.filter(e => e.end).map(e =>
-        `<div class="rowline"><span class="n">#${e.pkt.no}</span>
-          <span class="g">digit ${esc(e.digit)} · vol ${e.volume}</span>
-          <span class="v">${(e.duration / g.clock * 1000).toFixed(0)} ms</span></div>`).join('')
-        || '<span style="color:var(--muted)">No completed events</span>'}
-      </div>` : ''}
-
-    <h4 style="margin:14px 0 6px;font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px">
-      Sequence gaps (${g.gaps.length})</h4>
-    <div style="max-height:280px;overflow:auto">${gapRows}</div>
-  `;
-  card.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 }
 
-/* ---------- Audio export tab ---------- */
+/* ---- Convert to WAV using ffmpeg.wasm ---- */
+async function convertToWav(g, cls, idx){
+  const rep = document.getElementById('report-' + idx);
+  const btn = document.getElementById('convert-' + idx);
+  if (btn) btn.disabled = true;
 
-function buildAudioTab(){
-  const body = $('#audioBody');
-  const amrStreams = state.streams.filter(g =>
-    /AMR/i.test(g.codec || '') && !/telephone-event/i.test(g.codec || ''));
+  const logBox = document.createElement('div');
+  logBox.className = 'fflog';
+  logBox.textContent = '';
+  rep.innerHTML = '<div class="infobox">Loading ffmpeg.wasm (first run downloads ~30 MB)…</div>';
+  rep.appendChild(logBox);
 
-  if (!amrStreams.length){
-    body.innerHTML = '<div class="card"><div class="empty">' +
-      'No AMR / AMR-WB audio streams were detected in this capture. ' +
-      'If your capture uses a different codec, use the RTP Streams tab for the raw timing data.' +
-      '</div></div>';
-    return;
-  }
+  const appendLog = m => {
+    logBox.textContent += m + '\n';
+    logBox.scrollTop = logBox.scrollHeight;
+  };
 
-  body.innerHTML = amrStreams.map((g, i) => {
-    const isWB = /WB/i.test(g.codec || '');
-    const ext = isWB ? 'awb' : 'amr';
-    return `
-    <div class="streamcard" data-idx="${i}">
-      <h4>
-        ${esc(g.codec)} ${g.octetAlign ? '<span class="badge">octet-aligned</span>' : '<span class="badge">bandwidth-efficient</span>'}
-        <span class="badge">SSRC 0x${g.ssrc.toString(16).padStart(8, '0')}</span>
-        <span class="badge">PT ${g.pt}</span>
-      </h4>
-      <div style="font-family:var(--mono);font-size:11.5px;color:var(--muted);margin-bottom:10px">
-        ${esc(g.src)}:${g.sport}  →  ${esc(g.dst)}:${g.dport}
-      </div>
-      <div class="statsrow">
-        <div class="statbox"><div class="l">Frames received</div><div class="v">${g.count}</div></div>
-        <div class="statbox"><div class="l">True duration</div><div class="v ok">${fmtDur(g.mediaDuration)}</div>
-          <div style="font-size:10.5px;color:var(--muted);margin-top:2px">from RTP timestamps</div></div>
-        <div class="statbox"><div class="l">Wall-clock span</div><div class="v">${fmtDur(g.arrivalDuration)}</div>
-          <div style="font-size:10.5px;color:var(--muted);margin-top:2px">capture arrival</div></div>
-        <div class="statbox"><div class="l">Lost packets</div>
-          <div class="v ${g.lost ? 'err' : 'ok'}">${g.lost}</div></div>
-        <div class="statbox"><div class="l">Jitter</div><div class="v">${g.jitter.toFixed(2)} ms</div></div>
-      </div>
-      <canvas class="timeline" id="tl-${i}"></canvas>
-      <div class="legendline">
-        <span><i style="background:#3fb950"></i>received</span>
-        <span><i style="background:#f85149"></i>missing</span>
-        <span><i style="background:#58a6ff"></i>marker bit</span>
-        <span><i style="background:#d29922"></i>out of order</span>
-      </div>
-      <div class="actions">
-        <button class="btn primary" data-act="dl-audio" data-idx="${i}">
-          Download .${ext} (correct duration)</button>
-        <button class="btn" data-act="dl-csv" data-idx="${i}">Download timing CSV</button>
-        <button class="btn" data-act="dl-json" data-idx="${i}">Download JSON</button>
-      </div>
-      <div id="report-${i}" style="margin-top:10px;font-size:12px;color:var(--muted)"></div>
+  try {
+    const ff = await getFFmpeg();
+    logBox.classList.add('show');
+
+    const ext = cls.isWB ? 'awb' : 'amr';
+    const inName  = 'in.' + ext;
+    const outName = 'out.wav';
+
+    /* build the AMR/WB blob (SID → NO_DATA substitution keeps ffmpeg happy) */
+    rep.firstElementChild.textContent = 'Building AMR file…';
+    const built = buildAMRFile(g.packets, cls.isWB, cls.octetAlign,
+                               cls.frameSamples, { replaceSid: true });
+
+    await ff.writeFile(inName, built.bytes);
+
+    rep.firstElementChild.textContent = 'Decoding with ffmpeg.wasm…';
+    ff.on('log', ({ message }) => appendLog(message));
+
+    await ff.exec([
+      '-hide_banner', '-y',
+      '-i', inName,
+      '-ar', String(cls.clock),
+      '-ac', '1',
+      outName
+    ]);
+
+    const data = await ff.readFile(outName);
+    const wavBlob = new Blob([data.buffer], { type: 'audio/wav' });
+    const wavName = `stream-${idx}-ssrc-${g.ssrc.toString(16)}.wav`;
+    const url = URL.createObjectURL(wavBlob);
+    const a = document.createElement('a');
+    a.href = url; a.download = wavName;
+    document.body.appendChild(a); a.click();
+    setTimeout(() => { URL.revokeObjectURL(url); a.remove(); }, 400);
+
+    rep.firstElementChild.innerHTML = `
+      <div class="okbox">
+        <b>${esc(wavName)}</b> written — ${fmtBytes(wavBlob.size)}<br>
+        ${cls.clock} Hz · mono · ${fmtDur(built.stats.framesEmitted * cls.frameSamples / cls.clock)}<br>
+        WAV downloaded. The <code>.${ext}</code> file is still available via the button above.
+      </div>`;
+
+    try { await ff.deleteFile(inName); } catch(e){}
+    try { await ff.deleteFile(outName); } catch(e){}
+  } catch(e){
+    console.error(e);
+    rep.firstElementChild.innerHTML = `<div class="errbox">
+      ffmpeg.wasm failed: ${esc(e.message)}<br>
+      You can still download the .${cls.isWB ? 'awb' : 'amr'} file and decode it with a native
+      <code>ffmpeg -i file.${cls.isWB ? 'awb' : 'amr'} out.wav</code>.
     </div>`;
-  }).join('');
-
-  /* draw timelines */
-  amrStreams.forEach((g, i) => drawTimeline(document.getElementById('tl-' + i), g));
-
-  /* wire buttons */
-  $$('#audioBody button[data-act]').forEach(btn => {
-    btn.onclick = () => {
-      const idx = +btn.dataset.idx;
-      const g = amrStreams[idx];
-      const act = btn.dataset.act;
-      if (act === 'dl-audio'){
-        const built = buildAmrFile(g);
-        const ext = /WB/i.test(g.codec || '') ? 'awb' : 'amr';
-        const name = `ssrc-${g.ssrc.toString(16)}-${g.src.replace(/[^0-9a-f]/gi, '').slice(-8)}.${ext}`;
-        downloadBlob(built.bytes, name, 'audio/amr');
-        const rep = document.getElementById('report-' + idx);
-        rep.innerHTML = `Wrote <b>${built.framesWritten}</b> frames ` +
-          `(<b>${built.speechFrames}</b> speech + <b>${built.silenceInserted}</b> NO_DATA padding) — ` +
-          `total <b>${(built.framesWritten * (g.frameSamples / g.clock) * 1000 / 1000).toFixed(2)} s</b>. ` +
-          `Open in VLC or run <code>ffmpeg -i ${esc(name)} out.wav</code>.`;
-      }
-      if (act === 'dl-csv'){
-        downloadText(buildStreamCsv(g),
-          `rtp-ssrc-${g.ssrc.toString(16)}-timing.csv`, 'text/csv');
-      }
-      if (act === 'dl-json'){
-        const json = {
-          ssrc: '0x' + g.ssrc.toString(16),
-          source: g.src + ':' + g.sport,
-          destination: g.dst + ':' + g.dport,
-          codec: g.codec, payloadType: g.pt, clock: g.clock,
-          octetAlign: g.octetAlign,
-          frameSamples: g.frameSamples,
-          packetsReceived: g.count,
-          packetsLost: g.lost,
-          lossPercent: +g.lossPct.toFixed(3),
-          jitterMs: +g.jitter.toFixed(3),
-          bitrateBps: Math.round(g.bitrate),
-          mediaDurationSec: +g.mediaDuration.toFixed(6),
-          arrivalSpanSec: +g.arrivalDuration.toFixed(6),
-          firstTimestamp: g.packets[0].rtp.ts,
-          lastTimestamp: g.packets[g.packets.length - 1].rtp.ts,
-          frames: g.packets.map(p => ({
-            no: p.no, arrival: p.ts, seq: p.rtp.seq, extSeq: p.extSeq,
-            ts: p.rtp.ts, marker: p.rtp.marker, bytes: p.rtp.payload.length
-          }))
-        };
-        downloadText(JSON.stringify(json, null, 2),
-          `rtp-ssrc-${g.ssrc.toString(16)}.json`, 'application/json');
-      }
-    };
-  });
-
-  /* DTMF streams */
-  const dtmfStreams = state.streams.filter(g => /telephone-event/i.test(g.codec || ''));
-  if (dtmfStreams.length){
-    const block = document.createElement('div');
-    block.className = 'streamcard';
-    block.innerHTML = `<h4>DTMF (telephone-event)</h4>` +
-      dtmfStreams.map((g, i) => {
-        const ends = g.frames.filter(f => f.kind === 'dtmf' && f.end);
-        return `<div style="margin-bottom:10px">
-          <div style="font-family:var(--mono);font-size:11.5px;color:var(--muted)">
-            ${esc(g.src)}:${g.sport} → ${esc(g.dst)}:${g.dport} · SSRC 0x${g.ssrc.toString(16)}
-          </div>
-          <div style="font-family:var(--mono);font-size:14px;margin:6px 0">
-            ${ends.map(e => esc(e.digit)).join(' ') || '(no completed events)'}
-          </div>
-          <button class="btn" data-dtmf="${i}">Download DTMF tones (.wav)</button>
-        </div>`;
-      }).join('');
-    document.getElementById('audioBody').appendChild(block);
-
-    $$('#audioBody button[data-dtmf]').forEach(btn => {
-      btn.onclick = () => {
-        const g = dtmfStreams[+btn.dataset.dtmf];
-        const wav = buildDtmfWav(g.frames, g.clock);
-        if (!wav){ alert('No DTMF events to render'); return; }
-        downloadBlob(wav, `dtmf-ssrc-${g.ssrc.toString(16)}.wav`, 'audio/wav');
-      };
-    });
+  } finally {
+    if (btn) btn.disabled = false;
   }
 }
 
-function drawTimeline(canvas, g){
-  const dpr = window.devicePixelRatio || 1;
-  const W = canvas.clientWidth || 800, H = 56;
-  canvas.width = W * dpr; canvas.height = H * dpr;
-  const ctx = canvas.getContext('2d');
-  ctx.scale(dpr, dpr);
-  ctx.clearRect(0, 0, W, H);
-
-  const baseTs = g.packets[0].rtp.ts;
-  const totalTs = g.tsSpan + g.frameSamples || 1;
-  const xOf = ts => (((ts - baseTs) >>> 0) / totalTs) * (W - 8) + 4;
-
-  /* background grid every second */
-  ctx.strokeStyle = '#1a2330';
-  ctx.lineWidth = 1;
-  const seconds = Math.max(1, Math.ceil(g.mediaDuration));
-  for (let s = 0; s <= seconds; s++){
-    const x = (s / seconds) * (W - 8) + 4;
-    ctx.beginPath(); ctx.moveTo(x, 6); ctx.lineTo(x, H - 6); ctx.stroke();
-    if (s % Math.max(1, Math.round(seconds / 10)) === 0){
-      ctx.fillStyle = '#4d5b6b';
-      ctx.font = '9px ui-monospace,monospace';
-      ctx.fillText(s + 's', x + 2, H - 2);
-    }
-  }
-
-  /* loss regions */
-  ctx.fillStyle = '#f8514933';
-  for (const gp of g.gaps){
-    if (!gp.missing) continue;
-    const x1 = xOf(gp.after.rtp.ts);
-    const x2 = xOf(gp.before.rtp.ts);
-    ctx.fillRect(x1, 6, Math.max(1.5, x2 - x1), H - 12);
-  }
-
-  /* packets */
-  for (const p of g.packets){
-    const x = xOf(p.rtp.ts);
-    ctx.fillStyle = p.rtp.marker ? '#58a6ff' : '#3fb950';
-    ctx.fillRect(x, 8, 1.6, H - 16);
-  }
-}
-
-/* ---------- statistics ---------- */
-
-function buildStats(){
-  const P = state.packets;
-  const totalBytes = P.reduce((a, p) => a + p.capLen, 0);
-  const t0 = P[0].ts, t1 = P[P.length - 1].ts;
-  const dur = t1 - t0;
-  const sipN = state.sip.length;
-  const rtpN = P.filter(p => p.rtp).length;
-  const espN = P.filter(p => p.esp).length;
-
-  $('#statCards').innerHTML = [
-    ['Frames', P.length.toLocaleString()],
-    ['Total bytes', fmtBytes(totalBytes)],
-    ['Capture duration', fmtDur(dur)],
-    ['SIP messages', sipN],
-    ['RTP packets', rtpN],
-    ['ESP packets', espN]
-  ].map(([l, v]) =>
-    `<div class="stat"><div class="label">${l}</div><div class="value">${v}</div></div>`).join('');
-
-  const byProto = {};
-  for (const p of P) byProto[p.proto] = (byProto[p.proto] || 0) + 1;
-  const entries = Object.entries(byProto).sort((a, b) => b[1] - a[1]);
-  const maxP = entries[0][1];
-  $('#protoStats').innerHTML = entries.map(([k, v]) => `
-    <div style="margin-bottom:9px">
-      <div class="rowline" style="border:none;padding:0">
-        <span class="g"><span class="tag ${protoClass(k)}">${esc(k)}</span></span>
-        <span class="v">${v}</span>
-      </div>
-      <div class="bar"><span style="width:${(v / maxP * 100).toFixed(1)}%"></span></div>
-    </div>`).join('');
-
-  const bySrc = {};
-  for (const p of P) bySrc[p.src] = (bySrc[p.src] || 0) + p.capLen;
-  const top = Object.entries(bySrc).sort((a, b) => b[1] - a[1]).slice(0, 10);
-  $('#talkerStats').innerHTML = top.map(([k, v]) =>
-    `<div class="rowline">
-      <span class="g" title="${esc(k)}">${esc(shortIp(k))}</span>
-      <span class="v">${fmtBytes(v)}</span>
-    </div>`).join('');
-
-  $('#bigStats').innerHTML = [...P].sort((a, b) => b.capLen - a.capLen).slice(0, 10).map(p =>
-    `<div class="rowline">
-      <span class="n">#${p.no}</span>
-      <span class="g">${esc(p.proto)} · ${esc(p.info.slice(0, 48))}</span>
-      <span class="v">${p.capLen}</span>
-    </div>`).join('');
-
-  $('#timeline').innerHTML = state.sip.slice(0, 40).map(m =>
-    `<div class="rowline">
-      <span class="n">${((m.ts - t0) * 1000).toFixed(0)} ms</span>
-      <span class="g">${esc(m.label)}</span>
-      <span class="v" style="color:${sipColor(m)}">#${m.no || '—'}</span>
-    </div>`).join('') || '<div class="empty">No SIP events</div>';
-}
-
-/* =====================================================================================
-   PART 9 — FILE INPUT / TABS / KEYBOARD
-   ===================================================================================== */
-
+/* =====================================================================
+   FILE INPUT
+   ===================================================================== */
 $('#openBtn').onclick = () => $('#fileInput').click();
 $('#pickBtn').onclick = () => $('#fileInput').click();
 $('#fileInput').onchange = e => {
   const f = e.target.files[0];
   if (f) loadFile(f);
 };
-
 const drop = $('#drop');
 ['dragenter', 'dragover'].forEach(ev =>
   document.addEventListener(ev, e => { e.preventDefault(); drop.classList.add('hot'); }));
@@ -2242,41 +1589,6 @@ document.addEventListener('drop', e => {
   const f = e.dataTransfer.files[0];
   if (f) loadFile(f);
 });
-
-$$('.tab').forEach(t => t.onclick = () => {
-  $$('.tab').forEach(x => x.classList.remove('active'));
-  $$('.view').forEach(x => x.classList.remove('active'));
-  t.classList.add('active');
-  $('#view-' + t.dataset.tab).classList.add('active');
-});
-
-document.addEventListener('keydown', e => {
-  if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
-  if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;
-  if (!state.filtered.length) return;
-  e.preventDefault();
-  const idx = state.filtered.findIndex(p => p.no === state.selectedNo);
-  let next;
-  if (idx === -1) next = 0;
-  else next = Math.min(state.filtered.length - 1, Math.max(0, idx + (e.key === 'ArrowDown' ? 1 : -1)));
-  selectPacket(state.filtered[next].no);
-});
-
-window.addEventListener('resize', () => {
-  const amrStreams = state.streams.filter(g =>
-    /AMR/i.test(g.codec || '') && !/telephone-event/i.test(g.codec || ''));
-  amrStreams.forEach((g, i) => {
-    const c = document.getElementById('tl-' + i);
-    if (c) drawTimeline(c, g);
-  });
-});
-
-/* ---------- auto-load hint ---------- */
-(function autoHint(){
-  const msg = document.getElementById('autoMsg');
-  msg.innerHTML = 'Ready. Select or drop a <code>.pcap</code> / <code>.pcapng</code> file. ' +
-    '<span style="color:#5c6b7c">(browsers cannot read local files without your permission)</span>';
-})();
 </script>
 </body>
 </html>
