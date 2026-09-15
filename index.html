@@ -4,13 +4,16 @@
 <meta charset="utf-8">
 <title>PCAP RTP → Audio</title>
 <style>
-  body { font-family: system-ui, sans-serif; max-width: 920px; margin: 20px auto; padding: 0 16px; }
+  body { font-family: system-ui, sans-serif; max-width: 960px; margin: 20px auto; padding: 0 16px; }
   h1 { font-size: 22px; }
   .stream { border: 1px solid #ccc; padding: 10px; margin: 8px 0; border-radius: 6px; }
   .stream.selected { border-color: #06f; background: #f0f7ff; }
   .stream label { cursor: pointer; display: block; }
   .mono { font-family: ui-monospace, monospace; font-size: 13px; }
-  button { padding: 8px 16px; font-size: 14px; cursor: pointer; }
+  .hint { font-size: 12px; color: #666; margin-left: 24px; margin-top: 2px; }
+  .hint .bad { color: #b00; }
+  .hint .ok  { color: #080; }
+  button { padding: 8px 16px; font-size: 14px; cursor: pointer; margin-right: 6px; }
   button:disabled { opacity: 0.5; cursor: default; }
   #status { margin: 10px 0; color: #555; min-height: 20px; }
   audio { width: 100%; margin-top: 8px; }
@@ -18,6 +21,7 @@
   .controls label { margin-right: 16px; }
   .result { margin: 12px 0; padding: 10px; border: 1px solid #ddd; border-radius: 6px; }
   a { color: #06f; }
+  .toolbar { margin: 8px 0; }
 </style>
 </head>
 <body>
@@ -26,16 +30,29 @@
 
 <input type="file" id="fileInput" accept=".pcap,.pcapng,.cap">
 <div id="status"></div>
+
+<div class="toolbar" id="selectBar" style="display:none">
+  <button id="selectAllBtn" type="button">Select all</button>
+  <button id="clearAllBtn"  type="button">Clear</button>
+</div>
+
 <div id="streams"></div>
+
 <div id="controls" class="controls" style="display:none">
-  <label>Codec:
+  <label>Codec override:
     <select id="codec">
-      <option value="auto">Auto-detect</option>
-      <option value="nb">AMR-NB (8 kHz)</option>
-      <option value="wb">AMR-WB (16 kHz)</option>
+      <option value="auto">Auto (per-stream)</option>
+      <option value="nb">Force AMR-NB</option>
+      <option value="wb">Force AMR-WB</option>
     </select>
   </label>
-  <label><input type="checkbox" id="octetAlign" checked> Octet-aligned (octet-align=1)</label>
+  <label>Alignment override:
+    <select id="alignOverride">
+      <option value="auto">Auto (per-stream)</option>
+      <option value="octet">Force octet-aligned</option>
+      <option value="bw">Force bandwidth-efficient</option>
+    </select>
+  </label>
   <label>Output:
     <select id="outFormat">
       <option value="wav">WAV</option>
@@ -54,9 +71,9 @@ if (document.readyState === 'loading') {
 }
 const { FFmpeg } = FFmpegWASM;
 
-// ---------- AMR frame size tables (bits) ----------
+// ---------- AMR frame size tables (bits per frame) ----------
 const NB_BITS = [95,103,118,134,148,159,204,244,39,0,0,0,0,0,0,0];
-const WB_BITS = [132,177,253,285,317,365,397,461,477,40,0,0,0,0,0,0];
+const WB_BITS = [132,177,253,285,317,365,397,461,477,40,0,0,0,0,0,0,0];
 
 // ---------- PCAP / PCAPNG parser ----------
 function parsePcap(buf) {
@@ -106,7 +123,39 @@ function parsePcapng(buf) {
   return packets;
 }
 
-// ---------- UDP / RTP ----------
+// ---------- SDP scan: build PT -> {codec, octetAlign} ----------
+// Scans the raw pcap bytes as latin1 and extracts a=rtpmap / a=fmtp lines.
+function extractSdpInfo(bytes) {
+  const text = new TextDecoder('latin1').decode(bytes);
+  const ptMap = {}; // pt -> { codec?: 'nb'|'wb', octetAlign?: 0|1 }
+
+  // a=rtpmap:<pt> AMR/8000  |  a=rtpmap:<pt> AMR-WB/16000
+  const rtpmapRe = /a=rtpmap\s*:\s*(\d+)\s+(AMR-WB|AMR)\s*\/\s*(\d+)/gi;
+  let m;
+  while ((m = rtpmapRe.exec(text))) {
+    const pt = parseInt(m[1], 10);
+    const name = m[2].toUpperCase();
+    const codec = name === 'AMR-WB' ? 'wb' : 'nb';
+    (ptMap[pt] ||= {}).codec = codec;
+  }
+
+  // a=fmtp:<pt> <params...>   (look for octet-align=N)
+  const fmtpRe = /a=fmtp\s*:\s*(\d+)\s+([^\r\n]*)/gi;
+  while ((m = fmtpRe.exec(text))) {
+    const pt = parseInt(m[1], 10);
+    const params = m[2];
+    const om = /octet-align\s*=\s*(\d)/i.exec(params);
+    if (om) {
+      (ptMap[pt] ||= {}).octetAlign = parseInt(om[1], 10);
+    } else {
+      // Per RFC 4867 §8.1: default is 0 (bandwidth-efficient) if absent.
+      (ptMap[pt] ||= {}).octetAlign = 0;
+    }
+  }
+
+  return ptMap;
+}
+
 // ---------- IPv4 / IPv6 helpers ----------
 function ipv4ToString(d, off) {
   return `${d[off]}.${d[off+1]}.${d[off+2]}.${d[off+3]}`;
@@ -117,7 +166,6 @@ function ipv6ToString(d, off) {
   for (let i = 0; i < 8; i++) {
     seg.push(((d[off + i*2] << 8) | d[off + i*2 + 1]).toString(16));
   }
-  // compress longest run of zeros
   let best = { start: -1, len: 0 }, cur = { start: -1, len: 0 };
   for (let i = 0; i < 8; i++) {
     if (seg[i] === '0') {
@@ -139,23 +187,14 @@ function ipv6ToString(d, off) {
   return out.replace(/^::$/, '::');
 }
 
-// Parse IPv6 extension headers to find the UDP next-header offset.
-// Returns { nextHeader, udpOff } or null.
 function walkIpv6Extensions(d, startOff, firstNext) {
   let next = firstNext;
   let off = startOff;
-  // Extension header types that are NOT UDP/TCP/final
-  // 0 = HOPOPT, 43 = Routing, 44 = Fragment, 60 = Dest Options
   while (next === 0 || next === 43 || next === 44 || next === 60) {
     if (off + 8 > d.length) return null;
     let hdrLen;
-    if (next === 44) {
-      // Fragment header is always 8 bytes
-      hdrLen = 8;
-    } else {
-      // (Hdr Ext Len + 1) * 8
-      hdrLen = (d[off + 1] + 1) * 8;
-    }
+    if (next === 44) hdrLen = 8;
+    else hdrLen = (d[off + 1] + 1) * 8;
     next = d[off];
     off += hdrLen;
     if (off > d.length) return null;
@@ -167,12 +206,11 @@ function extractUdp(pkt) {
   const { linkType, data } = pkt;
   let ipOff;
 
-  // --- find IP header start ---
-  if (linkType === 1) {                       // Ethernet
+  if (linkType === 1) {
     if (data.length < 14) return null;
     let ethertype = (data[12] << 8) | data[13];
     let off = 14;
-    while (ethertype === 0x8100 || ethertype === 0x88a8) {  // VLAN tags
+    while (ethertype === 0x8100 || ethertype === 0x88a8) {
       if (data.length < off + 4) return null;
       ethertype = (data[off + 2] << 8) | data[off + 3];
       off += 4;
@@ -180,19 +218,18 @@ function extractUdp(pkt) {
     if (ethertype === 0x0800 || ethertype === 0x86dd) ipOff = off;
     else return null;
   } else if (linkType === 101 || linkType === 228 || linkType === 12) {
-    // RAW IP (101), LINKTYPE_IPV4 (228), LINKTYPE_RAW (12 - could be v4 or v6)
     ipOff = 0;
-  } else if (linkType === 113) {              // Linux SLL
+  } else if (linkType === 113) {
     if (data.length < 16) return null;
     const proto = (data[14] << 8) | data[15];
     if (proto !== 0x0800 && proto !== 0x86dd) return null;
     ipOff = 16;
-  } else if (linkType === 276) {              // Linux SLL2
+  } else if (linkType === 276) {
     if (data.length < 20) return null;
     const proto = (data[0] << 8) | data[1];
     if (proto !== 0x0800 && proto !== 0x86dd) return null;
     ipOff = 20;
-  } else if (linkType === 0) {                // NULL / loopback
+  } else if (linkType === 0) {
     ipOff = 4;
   } else {
     return null;
@@ -206,7 +243,7 @@ function extractUdp(pkt) {
   if (version === 4) {
     if (data.length < ipOff + 20) return null;
     const ihl = (data[ipOff] & 0x0f) * 4;
-    if (data[ipOff + 9] !== 17) return null;   // not UDP
+    if (data[ipOff + 9] !== 17) return null;
     src = ipv4ToString(data, ipOff + 12);
     dst = ipv4ToString(data, ipOff + 16);
     udpOff = ipOff + ihl;
@@ -217,7 +254,7 @@ function extractUdp(pkt) {
     dst = ipv6ToString(data, ipOff + 24);
     const walked = walkIpv6Extensions(data, ipOff + 40, firstNext);
     if (!walked) return null;
-    if (walked.nextHeader !== 17) return null;  // not UDP
+    if (walked.nextHeader !== 17) return null;
     udpOff = walked.udpOff;
   } else {
     return null;
@@ -226,7 +263,6 @@ function extractUdp(pkt) {
   if (data.length < udpOff + 8) return null;
   const sport = (data[udpOff]     << 8) | data[udpOff + 1];
   const dport = (data[udpOff + 2] << 8) | data[udpOff + 3];
-  // UDP length field: for IPv6 jumbograms it can be 0; fall back to "rest of packet"
   const ulen = (data[udpOff + 4] << 8) | data[udpOff + 5];
   const start = udpOff + 8;
   let end = ulen >= 8 ? Math.min(start + (ulen - 8), data.length) : data.length;
@@ -257,7 +293,6 @@ function parseRtp(p) {
   return { pt, seq, ts, ssrc, payload: p.slice(hdr, end) };
 }
 
-// ---------- AMR rebuild ----------
 function bitsToBytes(bits) {
   const out = new Uint8Array(Math.ceil(bits.length / 8));
   for (let i = 0; i < bits.length; i++) if (bits[i]) out[i >> 3] |= 1 << (7 - (i & 7));
@@ -272,7 +307,6 @@ function buildAmr(packets, wb, octetAlign) {
   for (const pkt of packets) {
     const p = pkt.payload;
     if (p.length < 2) continue;
-    // p[0] = CMR, then TOC list
     let i = 1;
     const tocs = [];
     while (i < p.length) {
@@ -322,52 +356,80 @@ function buildAmr(packets, wb, octetAlign) {
   return out;
 }
 
-// ---------- ffmpeg.wasm (lazy singleton) ----------
+// ---------- ffmpeg.wasm ----------
 let ffmpegInstance = null;
 async function getFfmpeg(onLog) {
   if (ffmpegInstance) return ffmpegInstance;
   const ff = new FFmpeg();
   if (onLog) ff.on('log', ({ message }) => onLog(message));
   const base = new URL('./ffmpeg/', document.baseURI).href;
-await ff.load({
-  coreURL: base + 'ffmpeg-core.js',
-  wasmURL: base + 'ffmpeg-core.wasm',
-});
+  await ff.load({
+    coreURL: base + 'ffmpeg-core.js',
+    wasmURL: base + 'ffmpeg-core.wasm',
+  });
   ffmpegInstance = ff;
   return ff;
 }
 
-// ---------- UI ----------
-let parsedStreams = [];
-let selected = new Set();
-let pcapHadWb = false;
+// ---------- UI state ----------
+let parsedStreams = [];    // [{ssrc, pt, src, dst, sport, dport, packets[], detected:{codec, octetAlign, source}}]
+let selected = new Set();  // SSRC values
+let sdpPtMap = {};         // PT -> {codec, octetAlign}
 
-const fileInput = document.getElementById('fileInput');
-const statusEl = document.getElementById('status');
-const streamsEl = document.getElementById('streams');
-const controlsEl = document.getElementById('controls');
-const resultsEl = document.getElementById('results');
-const convertBtn = document.getElementById('convertBtn');
+const fileInput   = document.getElementById('fileInput');
+const statusEl    = document.getElementById('status');
+const streamsEl   = document.getElementById('streams');
+const controlsEl  = document.getElementById('controls');
+const resultsEl   = document.getElementById('results');
+const convertBtn  = document.getElementById('convertBtn');
+const selectBar   = document.getElementById('selectBar');
 
-function byteContains(hay, needle) {
-  outer: for (let i = 0; i <= hay.length - needle.length; i++) {
-    for (let j = 0; j < needle.length; j++) if (hay[i + j] !== needle[j]) continue outer;
-    return true;
+// Detect codec / alignment per stream.
+function detectForStream(stream) {
+  const pt = stream.pt;
+  const sdp = sdpPtMap[pt] || {};
+  const detected = { codec: null, octetAlign: null, source: { codec: 'none', align: 'none' } };
+
+  if (sdp.codec) {
+    detected.codec = sdp.codec;
+    detected.source.codec = 'sdp';
+  } else {
+    // Heuristic: AMR-NB max payload ~33 B (mode 7, 1 frame + CMR+TOC);
+    // AMR-WB ~62 B. Multi-frame packets shift this, so use a mid threshold.
+    const total = stream.packets.reduce((s, p) => s + p.payload.length, 0);
+    const avg = total / stream.packets.length;
+    detected.codec = avg > 40 ? 'wb' : 'nb';
+    detected.source.codec = 'guess';
   }
-  return false;
+
+  if (sdp.octetAlign === 0 || sdp.octetAlign === 1) {
+    detected.octetAlign = sdp.octetAlign;
+    detected.source.align = 'sdp';
+  } else {
+    detected.octetAlign = 1; // IMS default
+    detected.source.align = 'default';
+  }
+
+  return detected;
 }
 
+// ---------- file handling ----------
 fileInput.addEventListener('change', async (e) => {
   const file = e.target.files[0];
   if (!file) return;
   resultsEl.innerHTML = '';
   streamsEl.innerHTML = '';
   controlsEl.style.display = 'none';
+  selectBar.style.display = 'none';
   statusEl.textContent = 'Reading file...';
 
   const buf = await file.arrayBuffer();
   const bytes = new Uint8Array(buf);
-  pcapHadWb = byteContains(bytes, new TextEncoder().encode('AMR-WB'));
+
+  statusEl.textContent = 'Scanning pcap for SDP...';
+  sdpPtMap = extractSdpInfo(bytes);
+  const sdpPtCount = Object.keys(sdpPtMap).length;
+  console.log('[SDP] PT map:', sdpPtMap);
 
   statusEl.textContent = 'Parsing pcap...';
   let packets;
@@ -398,12 +460,19 @@ fileInput.addEventListener('change', async (e) => {
   }
 
   parsedStreams = [...streams.values()].sort((a, b) => b.packets.length - a.packets.length);
+  for (const s of parsedStreams) s.detected = detectForStream(s);
+
   selected.clear();
-  statusEl.textContent = `Found ${parsedStreams.length} RTP stream(s). Select up to 2 to convert.`;
+  const sdpNote = sdpPtCount
+    ? `SDP found for PT(s): ${Object.keys(sdpPtMap).join(', ')}.`
+    : 'No SDP found in pcap — codec/alignment guessed.';
+  statusEl.textContent = `Found ${parsedStreams.length} RTP stream(s). ${sdpNote} Select one or more to convert.`;
   renderStreams();
+  selectBar.style.display = 'block';
   controlsEl.style.display = 'block';
 });
 
+// ---------- rendering ----------
 function renderStreams() {
   streamsEl.innerHTML = '';
   for (const s of parsedStreams) {
@@ -411,6 +480,15 @@ function renderStreams() {
     div.className = 'stream' + (selected.has(s.ssrc) ? ' selected' : '');
     const totalBytes = s.packets.reduce((sum, p) => sum + p.payload.length, 0);
     const avg = (totalBytes / s.packets.length).toFixed(1);
+
+    const d = s.detected;
+    const codecLabel = d.codec === 'wb' ? 'AMR-WB' : 'AMR-NB';
+    const alignLabel = d.octetAlign ? 'octet-aligned' : 'bandwidth-efficient';
+    const codecSrcTag = d.source.codec === 'sdp' ? 'from SDP' : 'guessed';
+    const alignSrcTag = d.source.align === 'sdp' ? 'from SDP' : 'default';
+    const codecCls = d.source.codec === 'sdp' ? 'ok' : '';
+    const alignCls = d.source.align === 'sdp' ? 'ok' : '';
+
     div.innerHTML = `
       <label>
         <input type="checkbox" ${selected.has(s.ssrc) ? 'checked' : ''}>
@@ -419,42 +497,70 @@ function renderStreams() {
           ${s.src}:${s.sport} → ${s.dst}:${s.dport} ·
           ${s.packets.length} pkts · avg ${avg} B
         </span>
-      </label>`;
+      </label>
+      <div class="hint">
+        <span class="${codecCls}">${codecLabel}</span> (${codecSrcTag}) ·
+        <span class="${alignCls}">${alignLabel}</span> (${alignSrcTag})
+      </div>`;
+
     const cb = div.querySelector('input');
     cb.addEventListener('change', () => {
-      if (cb.checked) {
-        if (selected.size >= 2) { cb.checked = false; return; }
-        selected.add(s.ssrc);
-      } else selected.delete(s.ssrc);
+      if (cb.checked) selected.add(s.ssrc);
+      else selected.delete(s.ssrc);
       renderStreams();
     });
     streamsEl.appendChild(div);
   }
 }
 
+document.getElementById('selectAllBtn').addEventListener('click', () => {
+  for (const s of parsedStreams) selected.add(s.ssrc);
+  renderStreams();
+});
+document.getElementById('clearAllBtn').addEventListener('click', () => {
+  selected.clear();
+  renderStreams();
+});
+
+// ---------- convert ----------
+function resolveEffective(s) {
+  // Global overrides first.
+  const codecChoice = document.getElementById('codec').value;
+  const alignChoice = document.getElementById('alignOverride').value;
+
+  let wb;
+  if (codecChoice === 'nb') wb = false;
+  else if (codecChoice === 'wb') wb = true;
+  else wb = s.detected.codec === 'wb';
+
+  let octetAlign;
+  if (alignChoice === 'octet') octetAlign = true;
+  else if (alignChoice === 'bw') octetAlign = false;
+  else octetAlign = s.detected.octetAlign === 1;
+
+  return { wb, octetAlign };
+}
+
 convertBtn.addEventListener('click', async () => {
   if (selected.size === 0) return;
   convertBtn.disabled = true;
   resultsEl.innerHTML = '';
-  statusEl.textContent = 'Loading ffmpeg (first time only, ~30 MB)...';
 
   try {
+    statusEl.textContent = 'Loading ffmpeg (first time only, ~32 MB)...';
     const ffmpeg = await getFfmpeg();
 
-    let codecChoice = document.getElementById('codec').value;
-    const octetAlign = document.getElementById('octetAlign').checked;
     const outFormat = document.getElementById('outFormat').value;
+    const targets = parsedStreams.filter(s => selected.has(s.ssrc));
 
-    for (const s of parsedStreams) {
-      if (!selected.has(s.ssrc)) continue;
-
-      const avg = s.packets.reduce((sum, p) => sum + p.payload.length, 0) / s.packets.length;
-      const wb = codecChoice === 'wb' || (codecChoice === 'auto' && (pcapHadWb || avg > 35));
-
-      statusEl.textContent = `Building AMR for SSRC ${s.ssrc.toString(16)}...`;
+    let done = 0;
+    for (const s of targets) {
+      done++;
+      const { wb, octetAlign } = resolveEffective(s);
+      statusEl.textContent = `[${done}/${targets.length}] Building AMR for SSRC ${s.ssrc.toString(16)}...`;
 
       const amr = buildAmr(s.packets, wb, octetAlign);
-      const inName = wb ? 'in.awb' : 'in.amr';
+      const inName  = wb ? 'in.awb' : 'in.amr';
       const outName = 'out.' + outFormat;
 
       await ffmpeg.writeFile(inName, amr);
@@ -466,7 +572,6 @@ convertBtn.addEventListener('click', async () => {
 
       const blob = new Blob([data.buffer], { type: outFormat === 'wav' ? 'audio/wav' : 'audio/mpeg' });
       const url = URL.createObjectURL(blob);
-
       const rawBlob = new Blob([amr], { type: 'audio/amr' });
       const rawUrl = URL.createObjectURL(rawBlob);
 
@@ -474,7 +579,9 @@ convertBtn.addEventListener('click', async () => {
       div.className = 'result';
       div.innerHTML = `
         <div class="mono">SSRC ${s.ssrc.toString(16).padStart(8, '0')} ·
-          ${s.src}:${s.sport} → ${s.dst}:${s.dport} · ${wb ? 'AMR-WB' : 'AMR-NB'} · ${octetAlign ? 'octet' : 'BW-eff'}</div>
+          ${s.src}:${s.sport} → ${s.dst}:${s.dport} ·
+          ${wb ? 'AMR-WB' : 'AMR-NB'} · ${octetAlign ? 'octet' : 'BW-eff'} ·
+          ${(amr.length/1024).toFixed(1)} KB</div>
         <audio controls src="${url}"></audio>
         <div>
           <a href="${url}" download="ssrc_${s.ssrc.toString(16)}.${outFormat}">Download ${outFormat.toUpperCase()}</a>
@@ -487,7 +594,7 @@ convertBtn.addEventListener('click', async () => {
       await ffmpeg.deleteFile(outName);
     }
 
-    statusEl.textContent = 'Done.';
+    statusEl.textContent = `Done — ${targets.length} stream(s) converted.`;
   } catch (err) {
     console.error(err);
     statusEl.textContent = 'Error: ' + err.message;
@@ -495,6 +602,7 @@ convertBtn.addEventListener('click', async () => {
     convertBtn.disabled = false;
   }
 });
+
 })();
 </script>
 </body>
