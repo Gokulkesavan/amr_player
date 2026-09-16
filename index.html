@@ -954,29 +954,73 @@ function detectAMRMode(payloads){
 /* =====================================================================
    AMR FILE WRITER
    ===================================================================== */
+/* Growable byte buffer: avoids pushing millions of boxed Numbers into a
+   plain Array (slow, GC-heavy) for long calls. Doubles capacity instead
+   of reallocating per-byte. */
+function ByteBuf(initial){
+  this.buf = new Uint8Array(initial || 1 << 16);
+  this.len = 0;
+}
+ByteBuf.prototype.push = function(b){
+  if (this.len >= this.buf.length){
+    const nb = new Uint8Array(this.buf.length * 2);
+    nb.set(this.buf);
+    this.buf = nb;
+  }
+  this.buf[this.len++] = b;
+};
+ByteBuf.prototype.bytes = function(){ return this.buf.subarray(0, this.len); };
+
 function buildAMRFile(rtpPackets, isWB, octetAlign, frameSamples, opts = {}){
-  const replaceSid = opts.replaceSid !== false;
+  /* Default: keep genuine SID (comfort-noise) frames intact. NO_DATA means
+     "frame lost, conceal it" to a decoder — that's a different code path
+     than a real CN update, and blanket-replacing every SID with NO_DATA
+     was forcing loss-concealment through what should be clean comfort
+     noise, which can itself sound like static on DTX-heavy calls. Only
+     substitute NO_DATA when explicitly requested (e.g. as a fallback if
+     a decoder can't handle a particular SID payload). */
+  const replaceSid = opts.replaceSid === true;
   const BITS  = isWB ? AMR_WB_BITS : AMR_NB_BITS;
   const SID_FT = isWB ? 9 : 8;
   const magic = isWB ? '#!AMR-WB\n' : '#!AMR\n';
-  const out = [];
+  const out = new ByteBuf();
   for (let i = 0; i < magic.length; i++) out.push(magic.charCodeAt(i));
 
-  const sorted = [...rtpPackets].sort((a, b) => a.extSeq - b.extSeq);
+  /* Sort by extended (unwrapped) sequence number, then drop exact
+     duplicate sequence numbers (retransmitted/duplicated captures —
+     common on SPAN/mirror taps) so a frame isn't emitted twice. */
+  const sortedAll = [...rtpPackets].sort((a, b) => a.extSeq - b.extSeq);
+  const sorted = [];
+  let lastSeq = null;
+  for (const p of sortedAll){
+    if (p.extSeq === lastSeq) continue; // duplicate packet, skip
+    sorted.push(p);
+    lastSeq = p.extSeq;
+  }
+
   const stats = {
     packets: sorted.length, framesEmitted: 0,
     speechFrames: 0, sidFrames: 0, sidReplaced: 0,
-    noDataFrames: 0, lostFrames: 0, parseErrors: 0
+    noDataFrames: 0, lostFrames: 0, parseErrors: 0,
+    duplicatesDropped: sortedAll.length - sorted.length
   };
 
   let prevTS = null;
+  let prevFrameCount = 1; // how many codec frames the *previous* packet represented
   for (const p of sorted){
     const ts = p.rtp.ts;
 
     if (prevTS != null){
       let d = (ts - prevTS) >>> 0;
-      if (d > frameSamples && d < frameSamples * 500){
-        const slots = Math.round(d / frameSamples) - 1;
+      /* A packet can legitimately carry more than one codec frame
+         (e.g. ptime=40 bundling two 20ms AMR frames per RTP packet).
+         The expected timestamp advance is prevFrameCount * frameSamples,
+         not a flat single frame — comparing against a flat single frame
+         inserted one bogus NO_DATA "click" after every bundled packet,
+         which is what was producing the near-constant crackling. */
+      const expected = prevFrameCount * frameSamples;
+      if (d > expected && d < frameSamples * 500){
+        const slots = Math.max(0, Math.round(d / frameSamples) - prevFrameCount);
         for (let i = 0; i < slots; i++){
           out.push(0x78);
           stats.noDataFrames++;
@@ -992,6 +1036,7 @@ function buildAMRFile(rtpPackets, isWB, octetAlign, frameSamples, opts = {}){
     if (!r.ok || !r.frames.length){
       stats.parseErrors++;
       prevTS = ts;
+      prevFrameCount = 1;
       continue;
     }
 
@@ -1024,9 +1069,10 @@ function buildAMRFile(rtpPackets, isWB, octetAlign, frameSamples, opts = {}){
       }
     }
     prevTS = ts;
+    prevFrameCount = r.frames.length;
   }
 
-  return { bytes: new Uint8Array(out), stats, magic: magic.trim() };
+  return { bytes: out.bytes(), stats, magic: magic.trim() };
 }
 
 /* =====================================================================
@@ -1060,9 +1106,13 @@ function analyzeRtpStreams(packets){
       g.packets[i].extSeq = ext;
       prev = s;
     }
-    const seqs = g.packets.map(p => p.extSeq);
-    g.minSeq = Math.min(...seqs);
-    g.maxSeq = Math.max(...seqs);
+    let minSeq = g.packets[0].extSeq, maxSeq = minSeq;
+    for (const p of g.packets){
+      if (p.extSeq < minSeq) minSeq = p.extSeq;
+      if (p.extSeq > maxSeq) maxSeq = p.extSeq;
+    }
+    g.minSeq = minSeq;
+    g.maxSeq = maxSeq;
     g.expected = g.maxSeq - g.minSeq + 1;
     g.lost = Math.max(0, g.expected - g.packets.length);
     g.lossPct = g.expected ? (g.lost / g.expected * 100) : 0;
@@ -1458,7 +1508,7 @@ function extractAMR(g, cls, idx){
   rep.innerHTML = '<span style="color:var(--muted)">Building file…</span>';
 
   try {
-    const built = buildAMRFile(g.packets, cls.isWB, cls.octetAlign, cls.frameSamples, { replaceSid: true });
+    const built = buildAMRFile(g.packets, cls.isWB, cls.octetAlign, cls.frameSamples, { replaceSid: false });
     const ext = cls.isWB ? 'awb' : 'amr';
     const name = `stream-${idx}-ssrc-${g.ssrc.toString(16)}.${ext}`;
     const blob = new Blob([built.bytes], { type: 'audio/amr' });
@@ -1474,10 +1524,11 @@ function extractAMR(g, cls, idx){
         <b>${esc(name)}</b> written — ${fmtBytes(built.bytes.length)}<br>
         Frames: <b>${built.stats.framesEmitted}</b> =
           ${built.stats.speechFrames} speech
-          + ${built.stats.sidReplaced} SID→NO_DATA
+          + ${built.stats.sidFrames} comfort-noise (SID)
           + ${built.stats.noDataFrames} NO_DATA
           ${built.stats.lostFrames ? '+ ' + built.stats.lostFrames + ' lost' : ''}<br>
         ${built.stats.parseErrors ? `<b style="color:var(--warn)">${built.stats.parseErrors} payloads failed to parse</b><br>` : ''}
+        ${built.stats.duplicatesDropped ? `<b style="color:var(--warn)">${built.stats.duplicatesDropped} duplicate RTP packet(s) dropped</b><br>` : ''}
         Duration: <b>${fmtDur(totalDuration)}</b>
         (RTP timestamps say ${fmtDur(cls.mediaDuration)})
       </div>`;
@@ -1514,15 +1565,25 @@ async function convertToWav(g, cls, idx){
     const inName  = 'in.' + ext;
     const outName = 'out.wav';
 
-    /* build the AMR/WB blob (SID → NO_DATA substitution keeps ffmpeg happy) */
+    /* Prefer genuine SID/comfort-noise frames — matches how a real
+       decoder (and Wireshark) would play the stream. Only fall back to
+       NO_DATA substitution if ffmpeg.wasm can't handle the raw SID data. */
     status.textContent = 'Building AMR file…';
-    const built = buildAMRFile(g.packets, cls.isWB, cls.octetAlign,
-                               cls.frameSamples, { replaceSid: true });
+    let built = buildAMRFile(g.packets, cls.isWB, cls.octetAlign,
+                              cls.frameSamples, { replaceSid: false });
 
     ff.FS('writeFile', inName, built.bytes);
 
     status.textContent = 'Decoding with ffmpeg.wasm…';
-    await ff.run('-i', inName, '-ar', String(cls.clock), '-ac', '1', outName);
+    try {
+      await ff.run('-i', inName, '-ar', String(cls.clock), '-ac', '1', outName);
+    } catch(decodeErr){
+      appendLog('Decode with real comfort-noise frames failed, retrying with SID→NO_DATA fallback…');
+      built = buildAMRFile(g.packets, cls.isWB, cls.octetAlign,
+                            cls.frameSamples, { replaceSid: true });
+      ff.FS('writeFile', inName, built.bytes);
+      await ff.run('-i', inName, '-ar', String(cls.clock), '-ac', '1', outName);
+    }
 
     const data = ff.FS('readFile', outName);   // 0.11.x returns Uint8Array
     const wavBytes = data instanceof Uint8Array ? data : new Uint8Array(data);
