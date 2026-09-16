@@ -624,6 +624,48 @@ function parseSipMessageText(text, kind){
   return msg;
 }
 
+/* SIP over UDP: each datagram normally carries one complete message
+   (no TCP-style reassembly needed). This is the common transport for
+   SBC/carrier trunk signaling, unlike the TCP path above. Content-Length
+   is trusted when present and sane; otherwise the rest of the datagram
+   is taken as the body. Note: a SIP/SDP message that got IP-fragmented
+   won't be seen, since fragmented IP packets are already dropped earlier
+   in the pipeline (decodeIPv4/decodeIPv6) — this covers the common
+   unfragmented case, which is the large majority of real captures. */
+function parseSipUdpPacket(p){
+  const buf = p.udp.payload;
+  if (!buf || buf.length < 12) return null;
+  const kind = sniffSip(buf, 0);
+  if (!kind) return null;
+  const hEnd = findDoubleCrlf(buf, 0);
+  if (hEnd < 0) return null;
+  const headerText = latin1(buf, 0, hEnd);
+  const clMatch = headerText.match(/\r?\nContent-Length\s*:\s*(\d+)/i);
+  const rest = buf.length - hEnd;
+  const cl = (clMatch && +clMatch[1] >= 0 && +clMatch[1] <= rest) ? +clMatch[1] : rest;
+  const bEnd = hEnd + cl;
+  const bodyText = bEnd > hEnd ? latin1(buf, hEnd, bEnd) : '';
+  const text = headerText + bodyText;
+  const m = parseSipMessageText(text, kind);
+  m.ts = p.ts;
+  m.src = p.src; m.dst = p.dst;
+  m.srcPort = p.srcPort; m.dstPort = p.dstPort;
+  m.transport = 'UDP';
+  return m;
+}
+
+function collectUdpSip(packets){
+  const msgs = [];
+  for (const p of packets){
+    if (!p.udp || p.rtp) continue; // p.rtp set means tryRTP already claimed this payload
+    try {
+      const m = parseSipUdpPacket(p);
+      if (m) msgs.push(m);
+    } catch(e){ /* not a SIP datagram, or malformed — skip */ }
+  }
+  return msgs;
+}
+
 function parseSDP(text, owner){
   const lines = text.split(/\r?\n/);
   const session = {
@@ -1317,6 +1359,8 @@ async function loadFile(file){
       const msgs = parseSipMessagesFromStream(s, s.src, s.dst);
       for (const m of msgs) sip.push(m);
     }
+    for (const m of collectUdpSip(packets)) sip.push(m);
+    sip.sort((a, b) => a.ts - b.ts);
 
     state.packets = packets;
     state.sip = sip;
@@ -1348,11 +1392,20 @@ function render(fileName){
   $('#app').hidden = false;
   $('#fileName').textContent = fileName;
 
-  // Only AMR streams reach the UI.
+  // Only AMR streams reach the UI — this tool exists to convert AMR-NB/WB,
+  // which Wireshark can't play; anything else, use Wireshark for.
   const amrStreams = state.streams.filter(g => {
     const cls = state.classifications.get(g.key);
     return cls && cls.isAMR;
   });
+  // Split by how the mode was determined: a real SDP correlation vs.
+  // payload-structure heuristics when no usable SDP was found for that
+  // particular stream. This is a per-stream distinction, not a
+  // per-capture one — a pcap can have SDP for some calls and not others.
+  const sdpGroup       = amrStreams.filter(g => state.classifications.get(g.key).source === 'SDP');
+  const heuristicGroup = amrStreams.filter(g => state.classifications.get(g.key).source !== 'SDP');
+  const orderedStreams = sdpGroup.concat(heuristicGroup);
+
   const rtpN = state.streams.length;
   const amrN = amrStreams.length;
 
@@ -1361,43 +1414,59 @@ function render(fileName){
   html += `<div class="summary">
     <div class="stat"><div class="l">RTP streams detected</div><div class="v">${rtpN}</div></div>
     <div class="stat"><div class="l">AMR streams</div><div class="v">${amrN}</div></div>
+    <div class="stat"><div class="l">Deduced from SDP</div><div class="v" style="color:#7ee2a0">${sdpGroup.length}</div></div>
+    <div class="stat"><div class="l">No SDP (heuristic)</div><div class="v" style="color:#e5b955">${heuristicGroup.length}</div></div>
   </div>`;
 
   if (amrN === 0){
     html += `<div class="warnbox">
       <b>No AMR / AMR-WB RTP streams were found in this capture.</b>
       Only AMR-NB and AMR-WB payload types are shown here; other codecs
-      (G.711, DTMF, etc.) are ignored by design.
+      (G.711, DTMF, etc.) are out of scope for this tool — use Wireshark
+      for those.
     </div>`;
   }
 
-  if (!state.sdpMedia.length && amrN > 0){
-    html += `<div class="warnbox">
-      <b>No SDP found in this capture.</b> AMR mode (AMR-NB vs AMR-WB) and alignment
-      (octet-aligned vs bandwidth-efficient) were inferred from the RTP payload structure.
-      Check the per-stream readout below before trusting the output.
-    </div>`;
-  }
+  let idx = 0;
 
-  html += `<section><h2>AMR Streams <span class="badge">${amrN}</span></h2>`;
-
-  if (amrN === 0){
-    html += `<div class="card"><div class="hint">Nothing to extract.</div></div>`;
+  html += `<section><h2>Deduced from SDP <span class="badge">${sdpGroup.length}</span></h2>`;
+  if (!sdpGroup.length){
+    html += `<div class="card"><div class="hint">
+      ${state.sip.length
+        ? 'SIP/SDP was found in this capture, but none of it correlated to an AMR RTP stream below.'
+        : 'No SIP signaling (SDP) was found in this capture — every AMR stream below was classified by inspecting the RTP payload directly.'}
+    </div></div>`;
   } else {
-    let idx = 0;
-    for (const g of amrStreams){
+    for (const g of sdpGroup){
       idx++;
-      const cls = state.classifications.get(g.key);
-      html += renderStreamCard(g, cls, idx);
+      html += renderStreamCard(g, state.classifications.get(g.key), idx);
+    }
+  }
+  html += `</section>`;
+
+  html += `<section><h2>No SDP — Heuristic Detection <span class="badge">${heuristicGroup.length}</span></h2>`;
+  if (!heuristicGroup.length){
+    html += `<div class="card"><div class="hint">Every AMR stream had a usable SDP correlation.</div></div>`;
+  } else {
+    html += `<div class="warnbox">
+      AMR mode (NB vs WB) and alignment (octet-aligned vs bandwidth-efficient) were
+      <b>inferred from the RTP payload structure</b> for the streams below — no matching
+      SDP was found for them. Check the confidence/evidence on each card before trusting
+      the output.
+    </div>`;
+    for (const g of heuristicGroup){
+      idx++;
+      html += renderStreamCard(g, state.classifications.get(g.key), idx);
     }
   }
   html += `</section>`;
 
   $('#content').innerHTML = html;
 
-  // Wire up buttons — index must match the loop above.
+  // Wire up buttons — index must match the render order above
+  // (sdpGroup first, then heuristicGroup).
   let i = 0;
-  for (const g of amrStreams){
+  for (const g of orderedStreams){
     i++;
     const cls = state.classifications.get(g.key);
     const btn = document.getElementById('extract-' + i);
