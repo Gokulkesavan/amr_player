@@ -119,6 +119,18 @@ pre .cm{color:#6b7d92;font-style:italic}
 .progress{height:4px;background:#1c2530;border-radius:2px;overflow:hidden;margin-top:8px}
 .progress > div{height:100%;background:var(--accent);width:0;transition:width .2s}
 </style>
+<style id="combine-addon-style">
+/* ---- Combine streams add-on (additive; does not alter existing rules) ---- */
+.cmb-panel{border-color:#1f6feb55;background:linear-gradient(180deg,#0f1c2b,var(--panel))}
+.cmb-panel h3{margin-bottom:6px}
+.cmb-pick{margin-left:auto;display:inline-flex;align-items:center;gap:6px;font-size:12px;
+  font-weight:500;color:var(--accent);cursor:pointer;padding:2px 10px;border-radius:6px;
+  border:1px solid #1f6feb55;background:#0f1c2b}
+.cmb-pick input{accent-color:var(--accent);cursor:pointer}
+.cmb-card-sel{border-color:var(--accent)!important;box-shadow:0 0 0 1px var(--accent) inset}
+.cmb-count{font-family:var(--mono);font-size:12px;color:var(--muted)}
+.cmb-result{margin-top:12px}
+</style>
 </head>
 <body>
 
@@ -2155,6 +2167,236 @@ document.addEventListener('drop', e => {
   const f = e.dataTransfer.files[0];
   if (f) loadFile(f);
 });
+</script>
+<script id="combine-addon">
+/* =====================================================================
+   COMBINE STREAMS ADD-ON
+   Mixes selected same-codec streams into one conversation (timestamp-aligned).
+   Purely additive: reuses the existing parser, buildAMRFile(),
+   decodeAmrToPCM(), encodeWavPCM16() and createInlinePlayer() as-is.
+   Watches #content for the app's own render() output, then adds
+   per-stream "Combine" tick boxes and one combine panel.
+   ===================================================================== */
+(function(){
+  const content = document.getElementById('content');
+  if (!content) return;
+
+  const decodedCache = new Map();   // stream key -> { pcm, sampleRate }
+  let lastUrl = null;
+
+  /* Same ordering render() uses: SDP-derived streams first, then heuristic. */
+  function orderedStreams(){
+    const amr = state.streams.filter(g => {
+      const c = state.classifications.get(g.key);
+      return c && c.isAMR;
+    });
+    const sdp = amr.filter(g => state.classifications.get(g.key).source === 'SDP');
+    const heu = amr.filter(g => state.classifications.get(g.key).source !== 'SDP');
+    return sdp.concat(heu);
+  }
+
+  async function decodeStream(g){
+    if (decodedCache.has(g.key)) return decodedCache.get(g.key);
+    const cls = state.classifications.get(g.key);
+    let built = buildAMRFile(g.packets, cls.isWB, cls.octetAlign,
+                             cls.frameSamples, { replaceSid: false });
+    let dec;
+    try {
+      dec = await decodeAmrToPCM(built.bytes);
+    } catch (e){
+      built = buildAMRFile(g.packets, cls.isWB, cls.octetAlign,
+                           cls.frameSamples, { replaceSid: true });
+      dec = await decodeAmrToPCM(built.bytes);
+    }
+    decodedCache.set(g.key, dec);
+    return dec;
+  }
+
+  function selectedItems(){
+    const order = orderedStreams();
+    const items = [];
+    content.querySelectorAll('.cmb-pick input:checked').forEach(cb => {
+      const i = parseInt(cb.dataset.i, 10);
+      if (order[i - 1]) items.push({ i, g: order[i - 1] });
+    });
+    return items;
+  }
+
+  function codecMismatch(items){
+    const wb = items.map(x => !!state.classifications.get(x.g.key).isWB);
+    return wb.some(v => v !== wb[0]);
+  }
+
+  function refreshSelection(){
+    const items = selectedItems();
+    const cnt = document.getElementById('cmb-count');
+    const btn = document.getElementById('cmb-go');
+    const warn = document.getElementById('cmb-mismatch');
+    const bad = items.length >= 2 && codecMismatch(items);
+    if (cnt) cnt.textContent = items.length + ' selected';
+    if (btn) btn.disabled = items.length < 2 || bad;
+    if (warn) warn.hidden = !bad;
+    content.querySelectorAll('.cmb-pick input').forEach(cb => {
+      const card = cb.closest('.card');
+      if (card) card.classList.toggle('cmb-card-sel', cb.checked);
+    });
+  }
+
+  async function combine(){
+    const items = selectedItems();
+    const out = document.getElementById('cmb-result');
+    const btn = document.getElementById('cmb-go');
+    if (items.length < 2 || codecMismatch(items)) return;
+
+    btn.disabled = true;
+    out.innerHTML = '<div class="infobox" id="cmb-status">Decoding streams…</div>';
+    const status = document.getElementById('cmb-status');
+
+    try {
+      const dec = [];
+      for (let k = 0; k < items.length; k++){
+        status.textContent = `Decoding stream ${items[k].i} (${k + 1}/${items.length})…`;
+        await new Promise(r => setTimeout(r, 0));
+        dec.push(Object.assign({}, items[k], await decodeStream(items[k].g)));
+      }
+
+      status.textContent = 'Mixing…';
+      await new Promise(r => setTimeout(r, 0));
+
+      /* All streams are the same codec (NB or WB), so they share one sample rate. */
+      const rate = dec[0].sampleRate;
+      const t0 = Math.min(...dec.map(d => d.g.firstTs));
+      dec.forEach(d => { d.off = Math.round((d.g.firstTs - t0) * rate); });
+
+      const total = Math.max(...dec.map(d => d.off + d.pcm.length));
+      const pcm = new Float32Array(total);
+      for (const d of dec){
+        for (let j = 0; j < d.pcm.length; j++) pcm[d.off + j] += d.pcm[j];
+      }
+
+      const notes = [];
+      let peak = 0;
+      for (let j = 0; j < pcm.length; j++){ const a = Math.abs(pcm[j]); if (a > peak) peak = a; }
+      if (peak > 1){
+        const sc = 0.98 / peak;
+        for (let j = 0; j < pcm.length; j++) pcm[j] *= sc;
+        notes.push('Mixed signal exceeded full scale, so it was scaled down by ' +
+                   (20 * Math.log10(sc)).toFixed(1) + ' dB to avoid clipping.');
+      }
+
+      let gapWarn = false;
+      const sorted = dec.slice().sort((a, b) => a.off - b.off);
+      let maxEnd = sorted[0].off + sorted[0].pcm.length;
+      for (let k = 1; k < sorted.length; k++){
+        if (sorted[k].off >= maxEnd) gapWarn = true;
+        maxEnd = Math.max(maxEnd, sorted[k].off + sorted[k].pcm.length);
+      }
+      dec.forEach(d => notes.push(`Stream ${d.i}: starts at +${(d.off / rate).toFixed(3)} s`));
+
+      const wavBytes = encodeWavPCM16(pcm, rate);
+      const wavBlob = new Blob([wavBytes.buffer], { type: 'audio/wav' });
+      if (lastUrl) URL.revokeObjectURL(lastUrl);
+      lastUrl = URL.createObjectURL(wavBlob);
+      const name = `conversation-streams-${items.map(x => x.i).join('-')}.wav`;
+      const dur = pcm.length / rate;
+
+      out.innerHTML = '';
+      const row = document.createElement('div');
+      row.className = 'actions';
+      row.style.marginTop = '0';
+      row.appendChild(createInlinePlayer(pcm, rate));
+      const dl = document.createElement('a');
+      dl.className = 'btn ok';
+      dl.href = lastUrl;
+      dl.download = name;
+      dl.textContent = 'Download conversation WAV';
+      row.appendChild(dl);
+      out.appendChild(row);
+
+      const info = document.createElement('div');
+      info.className = 'okbox';
+      info.style.marginTop = '10px';
+      info.innerHTML = `<b>${esc(name)}</b> · ${fmtBytes(wavBlob.size)}<br>
+        ${rate} Hz · mono · ${fmtDur(dur)}<br>
+        <span style="font-size:11.5px;opacity:.85">${notes.map(esc).join('<br>')}</span>`;
+      out.appendChild(info);
+
+      if (gapWarn){
+        const w = document.createElement('div');
+        w.className = 'warnbox';
+        w.textContent = 'Some selected streams do not overlap in time (they probably belong to ' +
+          'different calls), so the mix contains silence between them.';
+        out.appendChild(w);
+      }
+    } catch (e){
+      console.error('Combine failed:', e);
+      out.innerHTML = `<div class="errbox">Combine failed: ${esc(e && e.message ? e.message : String(e))}</div>`;
+    } finally {
+      refreshSelection();
+    }
+  }
+
+  function inject(){
+    if (content.querySelector('#cmb-panel')) return;
+    const order = orderedStreams();
+    if (order.length < 2) return;           // nothing to combine
+
+    decodedCache.clear();
+    if (lastUrl){ URL.revokeObjectURL(lastUrl); lastUrl = null; }
+
+    /* Per-stream tick boxes, placed in each card's heading. */
+    order.forEach((g, i0) => {
+      const i = i0 + 1;
+      const ex = document.getElementById('extract-' + i);
+      const card = ex && ex.closest('.card');
+      const h3 = card && card.querySelector('h3');
+      if (!h3 || h3.querySelector('.cmb-pick')) return;
+      const lab = document.createElement('label');
+      lab.className = 'cmb-pick';
+      lab.innerHTML = `<input type="checkbox" data-i="${i}"> Combine`;
+      lab.querySelector('input').onchange = refreshSelection;
+      h3.appendChild(lab);
+    });
+
+    /* The combine panel, placed right under the summary tiles. */
+    const panel = document.createElement('div');
+    panel.className = 'card cmb-panel';
+    panel.id = 'cmb-panel';
+    panel.innerHTML = `
+      <h3>Combine streams (conversation mix) <span class="tag info">${order.length} AMR streams available</span></h3>
+      <div class="hint" style="font-style:normal">
+        Tick <b>Combine</b> on two or more streams below (for a normal call, both directions).
+        They are mixed into one conversation on a shared timeline using capture timestamps.
+      </div>
+      <div class="warnbox" id="cmb-mismatch" hidden style="margin:10px 0 0">
+        The selection mixes AMR-NB and AMR-WB. Select streams of the same codec only.
+      </div>
+      <div class="actions">
+        <button class="btn" id="cmb-all" type="button">Select all</button>
+        <button class="btn" id="cmb-none" type="button">Clear</button>
+        <button class="btn primary" id="cmb-go" type="button" disabled>Mix &amp; Play</button>
+        <span class="cmb-count" id="cmb-count">0 selected</span>
+      </div>
+      <div class="cmb-result" id="cmb-result"></div>`;
+
+    const summary = content.querySelector('.summary');
+    if (summary) summary.after(panel); else content.prepend(panel);
+
+    panel.querySelector('#cmb-all').onclick = () => {
+      content.querySelectorAll('.cmb-pick input').forEach(cb => cb.checked = true);
+      refreshSelection();
+    };
+    panel.querySelector('#cmb-none').onclick = () => {
+      content.querySelectorAll('.cmb-pick input').forEach(cb => cb.checked = false);
+      refreshSelection();
+    };
+    panel.querySelector('#cmb-go').onclick = combine;
+  }
+
+  /* render() replaces #content.innerHTML wholesale; react to that. */
+  new MutationObserver(inject).observe(content, { childList: true });
+  inject();
+})();
 </script>
 </body>
 </html>
