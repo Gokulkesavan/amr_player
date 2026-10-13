@@ -487,25 +487,79 @@ pre .cm{color:#72829a;font-style:italic}
 .cmb-count{font-family:var(--mono);font-size:12px;color:var(--muted)}
 .cmb-result{margin-top:12px}
 /* ---- Audiogram (mixed audio only; display-only) ---- */
-.cmb-audiogram{margin-top:14px;padding:14px 16px;border:1px solid var(--line);border-radius:12px;
-  background:rgba(8,13,18,0.82);box-shadow:inset 0 1px 0 rgba(255,255,255,0.02)}
-.ag-head{display:flex;align-items:center;gap:14px;flex-wrap:wrap;margin-bottom:10px}
-.ag-title{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.14em;color:var(--muted)}
-.ag-legend{display:flex;align-items:center;gap:12px;font-size:11px;color:var(--muted)}
-.ag-legend i{display:inline-block;width:10px;height:10px;border-radius:3px;margin-right:6px;vertical-align:-1px}
-.ag-legend .a{background:var(--accent)}
-.ag-legend .s{background:rgba(255,140,140,0.55)}
-.ag-thr{margin-left:auto;display:flex;align-items:center;gap:8px;font-size:11px;color:var(--muted);font-family:var(--mono)}
-.ag-thr input{width:110px;accent-color:var(--accent);cursor:pointer}
-.ag-wrap{position:relative;height:150px;border-radius:8px;overflow:hidden}
-.ag-wrap canvas{width:100%;height:100%;display:block}
-.ag-playhead{position:absolute;top:0;bottom:18px;width:1px;left:0;background:rgba(237,243,251,0.85);
-  box-shadow:0 0 8px rgba(136,184,255,0.9);pointer-events:none}
-.ag-tip{position:absolute;top:6px;transform:translateX(-50%);pointer-events:none;white-space:nowrap;
-  padding:3px 8px;border-radius:6px;font:11px var(--mono);color:var(--text);
-  background:rgba(19,29,40,0.96);border:1px solid var(--line-strong);display:none}
-.ag-stats{display:flex;gap:18px;flex-wrap:wrap;margin-top:10px;font-family:var(--mono);font-size:11.5px;color:var(--muted)}
-.ag-stats b{color:var(--text);font-weight:600}
+/* ---- Audiogram (mixed audio only; display-only) ---- */
+.cmb-audiogram{
+  margin-top:14px;
+  padding:16px 18px 14px;
+  border:1px solid var(--line);
+  border-radius:14px;
+  background:linear-gradient(180deg, rgba(15,22,31,0.62), rgba(8,13,18,0.62));
+}
+.ag-head{
+  display:flex; align-items:center; gap:14px;
+  flex-wrap:wrap; margin-bottom:12px;
+}
+.ag-title{
+  font-size:11px; font-weight:600;
+  letter-spacing:.08em; text-transform:uppercase;
+  color:var(--text);
+  display:flex; align-items:center; gap:8px;
+}
+.ag-title::before{
+  content:""; width:6px; height:6px; border-radius:50%;
+  background:var(--accent);
+  box-shadow:0 0 10px rgba(136,184,255,.7);
+}
+.ag-thr{
+  margin-left:auto;
+  display:flex; align-items:center; gap:8px;
+  font-size:11px; color:var(--muted);
+}
+.ag-thr input{
+  width:100px; accent-color:var(--accent); cursor:pointer;
+}
+.ag-thr .ag-thrv{
+  font-family:var(--mono); color:var(--text);
+  min-width:54px; text-align:right;
+}
+.ag-wrap{
+  position:relative;
+  height:88px;
+  border-radius:10px;
+  overflow:hidden;
+  background:rgba(4,9,14,0.55);
+  border:1px solid rgba(169,187,214,0.06);
+}
+.ag-wrap canvas{width:100%; height:100%; display:block}
+.ag-playhead{
+  position:absolute; top:0; bottom:0; width:1px; left:0;
+  background:linear-gradient(180deg, transparent, rgba(237,243,251,.9), transparent);
+  box-shadow:0 0 10px rgba(136,184,255,.8);
+  pointer-events:none;
+}
+.ag-tip{
+  position:absolute; top:6px; transform:translateX(-50%);
+  pointer-events:none; white-space:nowrap;
+  padding:4px 10px; border-radius:8px;
+  font:11px var(--mono); color:var(--text);
+  background:rgba(19,29,40,0.96);
+  border:1px solid var(--line-strong);
+  box-shadow:0 8px 22px rgba(0,0,0,0.4);
+  display:none;
+}
+.ag-stats{
+  display:flex; gap:6px; flex-wrap:wrap;
+  margin-top:12px;
+}
+.ag-stats span{
+  display:inline-flex; align-items:baseline; gap:5px;
+  padding:4px 10px; border-radius:999px;
+  background:rgba(255,255,255,0.03);
+  border:1px solid var(--line);
+  font-family:var(--mono); font-size:11px;
+  color:var(--muted);
+}
+.ag-stats b{color:var(--text); font-weight:600}
 </style>
 </head>
 <body>
@@ -2717,11 +2771,12 @@ document.addEventListener('drop', e => {
 
   /* ---------------------------------------------------------------
      AUDIOGRAM (display-only). Reads the already-mixed PCM and draws
-     where audio is present vs. silent. Never modifies pcm or the player.
+     an activity strip: single-direction bars from a baseline, with
+     silence shown as a short dim tick. Never modifies pcm or the player.
      --------------------------------------------------------------- */
   function buildAudiogram(pcm, rate){
     const BIN_S = 0.02;                       // 20 ms = one AMR frame
-    const MIN_GAP = 0.5;                      // seconds; shaded / counted as a "gap"
+    const MIN_GAP = 0.5;                      // seconds; counted as a "gap"
     const binN = Math.max(1, Math.round(rate * BIN_S));
     const nb = Math.max(1, Math.ceil(pcm.length / binN));
     const dur = pcm.length / rate;
@@ -2735,6 +2790,162 @@ document.addEventListener('drop', e => {
       rms[b] = r;
       if (r > maxRms) maxRms = r;
     }
+    const toDb = v => v > 1e-9 ? 20 * Math.log10(v) : -120;
+    let thr = -50;
+
+    const root = document.createElement('div');
+    root.className = 'cmb-audiogram';
+    root.innerHTML = `
+      <div class="ag-head">
+        <span class="ag-title">Audio activity</span>
+        <label class="ag-thr">Silence below
+          <input type="range" min="-80" max="-20" step="1" value="${thr}" class="ag-range">
+          <span class="ag-thrv">${thr} dBFS</span></label>
+      </div>
+      <div class="ag-wrap"><canvas></canvas><div class="ag-playhead"></div><div class="ag-tip"></div></div>
+      <div class="ag-stats"></div>`;
+    const wrap   = root.querySelector('.ag-wrap');
+    const canvas = root.querySelector('canvas');
+    const head   = root.querySelector('.ag-playhead');
+    const tip    = root.querySelector('.ag-tip');
+    const stats  = root.querySelector('.ag-stats');
+    const range  = root.querySelector('.ag-range');
+    const thrv   = root.querySelector('.ag-thrv');
+
+    function updateStats(){
+      let silent = 0, run = 0, gaps = 0, longest = 0;
+      for (let b = 0; b <= nb; b++){
+        const isSil = b < nb && toDb(rms[b]) < thr;
+        if (isSil){ silent++; run++; }
+        else {
+          if (run * BIN_S >= MIN_GAP) gaps++;
+          if (run > longest) longest = run;
+          run = 0;
+        }
+      }
+      const sil = silent * BIN_S, pct = nb ? (silent / nb) * 100 : 0;
+      stats.innerHTML =
+        `<span>Duration <b>${dur.toFixed(2)} s</b></span>` +
+        `<span>Audio <b>${Math.max(0, dur - sil).toFixed(2)} s</b></span>` +
+        `<span>Silence <b>${sil.toFixed(2)} s</b> (${pct.toFixed(1)}%)</span>` +
+        `<span>Gaps &ge; ${MIN_GAP.toFixed(1)} s <b>${gaps}</b></span>` +
+        `<span>Longest <b>${(longest * BIN_S).toFixed(2)} s</b></span>`;
+    }
+
+    function niceStep(span){
+      const c = [0.1, 0.2, 0.5, 1, 2, 5, 10, 15, 30, 60, 120, 300, 600, 1800, 3600];
+      for (const v of c) if (span / v <= 10) return v;
+      return 3600;
+    }
+
+    function draw(){
+      const W = canvas.clientWidth, H = canvas.clientHeight;
+      if (!W || !H) return;
+      const dpr = window.devicePixelRatio || 1;
+      canvas.width  = Math.round(W * dpr);
+      canvas.height = Math.round(H * dpr);
+      const g = canvas.getContext('2d');
+      g.setTransform(dpr, 0, 0, dpr, 0, 0);
+      g.clearRect(0, 0, W, H);
+
+      const cs   = getComputedStyle(root);
+      const cAcc = cs.getPropertyValue('--accent').trim() || '#88b8ff';
+      const cMut = cs.getPropertyValue('--muted').trim()  || '#9aa9ba';
+
+      const axisH = 16;
+      const plotH = H - axisH;
+      const step = 3, barW = 2;
+      const cols = Math.max(1, Math.floor((W + 1) / step));
+      const colMax = new Float32Array(cols);
+      const colSil = new Array(cols);
+      for (let c = 0; c < cols; c++){
+        const b0 = Math.floor(c * nb / cols);
+        const b1 = Math.max(b0 + 1, Math.floor((c + 1) * nb / cols));
+        let m = 0;
+        for (let b = b0; b < b1 && b < nb; b++) if (rms[b] > m) m = rms[b];
+        colMax[c] = m;
+        colSil[c] = toDb(m) < thr;
+      }
+
+      /* baseline */
+      g.fillStyle = 'rgba(169,187,214,0.16)';
+      g.fillRect(0, plotH - 0.5, W, 1);
+
+      /* bars */
+      const maxH = plotH - 6;
+      const silH = 2;
+      for (let k = 0; k < cols; k++){
+        const x = k * step;
+        if (colSil[k]){
+          g.fillStyle = 'rgba(154,169,186,0.28)';
+          g.fillRect(x, plotH - silH, barW, silH);
+        } else {
+          const norm = Math.pow(colMax[k] / (maxRms || 1), 0.5);
+          const h = Math.max(3, norm * maxH);
+          const grad = g.createLinearGradient(0, plotH - h, 0, plotH);
+          grad.addColorStop(0, '#b8d6ff');
+          grad.addColorStop(1, cAcc);
+          g.fillStyle = grad;
+          g.fillRect(x, plotH - h, barW, h);
+        }
+      }
+
+      /* time axis */
+      const stepT = niceStep(dur);
+      g.font = '10px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace';
+      g.textBaseline = 'middle';
+      for (let t = 0; t <= dur + 1e-6; t += stepT){
+        const x = Math.min(W - 1, (t / dur) * W);
+        g.fillStyle = 'rgba(169,187,214,0.18)';
+        g.fillRect(Math.round(x), plotH, 1, 3);
+        g.fillStyle = cMut;
+        const lbl = (stepT < 1 ? t.toFixed(1) : Math.round(t)) + 's';
+        const tw  = g.measureText(lbl).width;
+        const tx  = Math.max(0, Math.min(W - tw, x - tw / 2));
+        g.fillText(lbl, tx, plotH + axisH / 2);
+      }
+    }
+
+    range.oninput = () => {
+      thr = parseInt(range.value, 10);
+      thrv.textContent = thr + ' dBFS';
+      updateStats();
+      draw();
+    };
+
+    wrap.addEventListener('mousemove', ev => {
+      const r = wrap.getBoundingClientRect();
+      const f = Math.min(1, Math.max(0, (ev.clientX - r.left) / r.width));
+      const b = Math.min(nb - 1, Math.floor(f * nb));
+      const db = toDb(rms[b]);
+      tip.textContent =
+        (f * dur).toFixed(2) + 's \u00b7 ' +
+        (db <= -120 ? '-inf' : db.toFixed(0)) + ' dBFS \u00b7 ' +
+        (db < thr ? 'silence' : 'audio');
+      tip.style.left  = Math.min(r.width - 70, Math.max(70, ev.clientX - r.left)) + 'px';
+      tip.style.display = 'block';
+    });
+    wrap.addEventListener('mouseleave', () => { tip.style.display = 'none'; });
+
+    /* playhead follows the existing player's seek bar (read-only) */
+    function follow(){
+      if (!root.isConnected) return;
+      const seek = root.parentElement && root.parentElement.querySelector('.player .seek');
+      if (seek) head.style.left = (seek.value / 1000) * 100 + '%';
+      requestAnimationFrame(follow);
+    }
+
+    updateStats();
+    if (typeof ResizeObserver !== 'undefined'){
+      const ro = new ResizeObserver(() => {
+        if (!root.isConnected){ ro.disconnect(); return; }
+        draw();
+      });
+      ro.observe(wrap);
+    }
+    requestAnimationFrame(() => { draw(); follow(); });
+    return root;
+  }
     const toDb = v => v > 1e-9 ? 20 * Math.log10(v) : -120;
     let thr = -50;
 
