@@ -486,6 +486,57 @@ pre .cm{color:#72829a;font-style:italic}
 .cmb-card-sel{border-color:var(--accent)!important;box-shadow:0 0 0 1px var(--accent) inset,0 12px 30px rgba(34,66,112,0.18)}
 .cmb-count{font-family:var(--mono);font-size:12px;color:var(--muted)}
 .cmb-result{margin-top:12px}
+
+/* ---- AMR mode reference and stream-selection workspace ---- */
+.mode-reference{
+  padding:14px 16px;
+  margin-bottom:16px;
+  border:1px solid var(--line);
+  border-radius:12px;
+  background:linear-gradient(180deg,rgba(17,26,38,.92),rgba(10,16,23,.92));
+}
+.mode-reference-head{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.mode-reference-head h2{margin:0;font-size:13px;color:var(--text);letter-spacing:.02em}
+.mode-reference-note{margin:7px 0 12px;font-style:normal}
+.mode-reference-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+.mode-reference-card{min-width:0;padding:10px 12px;border:1px solid var(--line);border-radius:9px;background:rgba(4,9,14,.38)}
+.mode-reference-card h3{display:flex;align-items:center;justify-content:space-between;gap:8px;margin:0 0 6px;font-size:12px}
+.mode-reference-card h3 span{font-size:10px;color:var(--muted);font-family:var(--mono);font-weight:500}
+.mode-table{width:100%;border-collapse:collapse;font-size:11px;font-family:var(--mono)}
+.mode-table th,.mode-table td{padding:4px 7px;border-bottom:1px solid rgba(169,187,214,.08);text-align:left}
+.mode-table th{color:var(--muted);font-family:inherit;font-weight:600}
+.mode-table td:last-child,.mode-table th:last-child{text-align:right}
+.mode-table tbody tr:last-child td{border-bottom:0}
+.mode-reference-foot{margin:10px 0 0;color:var(--muted);font-size:11px;line-height:1.5}
+.mix-workspace{display:grid;grid-template-columns:minmax(245px,285px) minmax(0,1fr);gap:16px;align-items:start}
+.mix-sidebar-host{min-width:0;position:sticky;top:78px}
+.mix-sidebar-host:empty{display:none}
+.mix-sidebar-host:empty + .mix-main{grid-column:1 / -1}
+.mix-main{min-width:0}
+.cmb-panel.mix-sidebar-panel{padding:12px 13px;margin-bottom:14px}
+.cmb-panel.mix-sidebar-panel h3{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:8px;font-size:13px}
+.cmb-panel.mix-sidebar-panel .hint{line-height:1.5;margin:6px 0 10px}
+.mix-detected{font-size:12px;font-weight:650;color:var(--text);margin:8px 0}
+.mix-stream-list{display:flex;flex-direction:column;gap:7px;max-height:470px;overflow:auto;padding:0 2px 2px 0}
+.mix-stream-item{display:flex!important;align-items:flex-start;gap:10px;margin:0!important;padding:10px;border:1px solid var(--line);border-radius:9px;background:rgba(17,26,36,.72);color:var(--text);cursor:pointer;transition:border-color .16s ease,background .16s ease}
+.mix-stream-item:hover{border-color:rgba(136,184,255,.34);background:rgba(24,39,56,.86)}
+.mix-stream-item input{flex:0 0 auto;margin:2px 0 0;accent-color:var(--accent);cursor:pointer}
+.mix-stream-meta{display:flex;flex-direction:column;gap:3px;min-width:0}
+.mix-stream-meta strong{font-size:12px;font-weight:650;overflow-wrap:anywhere;color:var(--text)}
+.mix-stream-meta small{font-size:10px;line-height:1.4;color:var(--muted)}
+.mix-sidebar-panel .actions{gap:7px;margin-top:12px}
+.mix-sidebar-panel .actions #cmb-go{flex:1 1 100%}
+.mix-sidebar-panel .actions #cmb-count{flex:1 1 100%}
+.mix-main .card h3 > .cmb-pick{display:none!important}
+.mix-main .cmb-result{max-width:100%;margin:0 0 16px}
+@media(max-width:850px){
+  .mode-reference-grid{grid-template-columns:1fr}
+  .mix-workspace{grid-template-columns:minmax(0,1fr)}
+  .mix-sidebar-host{position:static}
+  .mix-sidebar-host:empty + .mix-main{grid-column:auto}
+  .mix-stream-list{max-height:280px}
+}
+
 /* ---- Audiogram (mixed audio only; display-only) ---- */
 /* ---- Audiogram (mixed audio only; display-only) ---- */
 .cmb-audiogram{
@@ -2230,6 +2281,33 @@ function render(fileName){
 
   let html = '';
 
+
+  html += '<section class="mode-reference" aria-label="AMR codec mode reference">' +
+    '<div class="mode-reference-head"><h2>AMR mode-set / bandwidth reference</h2>' +
+    '<span class="tag info">Speech modes</span></div>' +
+    '<p class="hint mode-reference-note">SDP <code>mode-set</code> lists permitted mode indices. RTP frame type (FT) identifies the mode actually carried.</p>' +
+    '<div class="mode-reference-grid">' +
+      '<div class="mode-reference-card"><h3>AMR-NB <span>8 kHz</span></h3>' +
+        '<table class="mode-table"><thead><tr><th>Mode / FT</th><th>Bitrate (kb/s)</th></tr></thead><tbody>' +
+          '<tr><td>0</td><td>4.75</td></tr><tr><td>1</td><td>5.15</td></tr>' +
+          '<tr><td>2</td><td>5.90</td></tr><tr><td>3</td><td>6.70</td></tr>' +
+          '<tr><td>4</td><td>7.40</td></tr><tr><td>5</td><td>7.95</td></tr>' +
+          '<tr><td>6</td><td>10.20</td></tr><tr><td>7</td><td>12.20</td></tr>' +
+        '</tbody></table>' +
+      '</div>' +
+      '<div class="mode-reference-card"><h3>AMR-WB <span>16 kHz</span></h3>' +
+        '<table class="mode-table"><thead><tr><th>Mode / FT</th><th>Bitrate (kb/s)</th></tr></thead><tbody>' +
+          '<tr><td>0</td><td>6.60</td></tr><tr><td>1</td><td>8.85</td></tr>' +
+          '<tr><td>2</td><td>12.65</td></tr><tr><td>3</td><td>14.25</td></tr>' +
+          '<tr><td>4</td><td>15.85</td></tr><tr><td>5</td><td>18.25</td></tr>' +
+          '<tr><td>6</td><td>19.85</td></tr><tr><td>7</td><td>23.05</td></tr>' +
+          '<tr><td>8</td><td>23.85</td></tr>' +
+        '</tbody></table>' +
+      '</div>' +
+    '</div>' +
+    '<p class="mode-reference-foot">Example: <code>mode-set=0,2,4</code> permits only those modes. SID and NO_DATA frame types are not speech bitrate modes.</p>' +
+  '</section>';
+  html += '<div class="mix-workspace"><aside id="mix-sidebar-host" class="mix-sidebar-host" aria-label="Stream selection"></aside><div class="mix-main">';
   html += `<div class="summary">
     <div class="stat"><div class="l">RTP streams detected</div><div class="v">${rtpN}</div></div>
     <div class="stat"><div class="l">AMR streams</div><div class="v">${amrN}</div></div>
@@ -2279,6 +2357,8 @@ function render(fileName){
     }
   }
   html += `</section>`;
+
+  html += '</div></div>';
 
   $('#content').innerHTML = html;
 
@@ -3083,5 +3163,121 @@ document.addEventListener('drop', e => {
   inject();
 })();
 </script>
+
+<script>
+/* Sidebar UI for multi-stream mixing. The existing per-card checkboxes remain
+   the source of truth so the decoder, timeline alignment and mixer stay intact. */
+(function(){
+  const content = document.getElementById('content');
+  if (!content) return;
+
+  function enhanceSidebar(){
+    const panel = content.querySelector('#cmb-panel');
+    const host = content.querySelector('#mix-sidebar-host');
+    const main = content.querySelector('.mix-main');
+    if (!panel || !host || !main || panel.dataset.sidebarReady === '1') return;
+
+    const legacyInputs = Array.from(content.querySelectorAll('.mix-main .card h3 .cmb-pick input[data-i]'));
+    if (!legacyInputs.length) return;
+
+    panel.dataset.sidebarReady = '1';
+    panel.classList.add('mix-sidebar-panel');
+
+    const heading = panel.querySelector('h3');
+    if (heading) heading.innerHTML = 'Streams by SSRC <span class="tag info">' + legacyInputs.length + '</span>';
+
+    const hint = panel.querySelector('.hint');
+    if (hint){
+      hint.textContent = 'Select streams to include in the conversation mix.';
+      hint.style.fontStyle = 'normal';
+    }
+
+    const detected = document.createElement('div');
+    detected.className = 'mix-detected';
+    detected.textContent = 'v Detected streams (' + legacyInputs.length + ')';
+
+    const list = document.createElement('div');
+    list.id = 'cmb-stream-list';
+    list.className = 'mix-stream-list';
+
+    legacyInputs.forEach(function(original){
+      const i = parseInt(original.dataset.i, 10);
+      const extract = document.getElementById('extract-' + i);
+      const card = extract ? extract.closest('.card') : null;
+      const cardHeading = card ? card.querySelector('h3') : null;
+      const tags = cardHeading ? Array.from(cardHeading.querySelectorAll('.tag')).map(function(tag){
+        return tag.textContent.trim();
+      }) : [];
+      const ssrcTag = tags.find(function(value){ return /^SSRC\b/i.test(value); });
+      const ptTag = tags.find(function(value){ return /^PT\b/i.test(value); });
+      const packetTag = tags.find(function(value){ return /\bpkts?\b/i.test(value); });
+
+      const row = document.createElement('label');
+      row.className = 'mix-stream-item';
+      const input = document.createElement('input');
+      input.type = 'checkbox';
+      input.className = 'mix-stream-input';
+      input.id = 'cmb-stream-' + i;
+      input.dataset.i = String(i);
+      input.checked = original.checked;
+      input.setAttribute('aria-label', 'Include stream ' + i + ' in mix');
+
+      const meta = document.createElement('span');
+      meta.className = 'mix-stream-meta';
+      const strong = document.createElement('strong');
+      strong.textContent = ssrcTag ? ssrcTag.replace(/^SSRC\s*/i, '') : ('Stream ' + i);
+      const small = document.createElement('small');
+      const packetText = packetTag ? packetTag.replace(/\bpkts?\b/i, 'packets') : '';
+      small.textContent = [ptTag, packetText].filter(Boolean).join(' - ') || 'Select to include in mix';
+      meta.appendChild(strong);
+      meta.appendChild(small);
+      row.appendChild(input);
+      row.appendChild(meta);
+      row.htmlFor = input.id;
+      row.title = cardHeading ? cardHeading.textContent.trim() : ('Stream ' + i);
+
+      input.addEventListener('change', function(){
+        original.checked = input.checked;
+        original.dispatchEvent(new Event('change', { bubbles: true }));
+      });
+      list.appendChild(row);
+    });
+
+    const insertionPoint = panel.querySelector('#cmb-mismatch') || panel.querySelector('.actions');
+    panel.insertBefore(detected, insertionPoint);
+    panel.insertBefore(list, insertionPoint);
+
+    const result = panel.querySelector('#cmb-result');
+    const summary = main.querySelector('.summary');
+    if (result){
+      result.classList.add('mix-result-wide');
+      if (summary) summary.after(result);
+      else main.prepend(result);
+    }
+    host.appendChild(panel);
+
+    function setAll(checked){
+      list.querySelectorAll('.mix-stream-input').forEach(function(input){
+        input.checked = checked;
+        const original = legacyInputs.find(function(candidate){
+          return candidate.dataset.i === input.dataset.i;
+        });
+        if (original){
+          original.checked = checked;
+          original.dispatchEvent(new Event('change', { bubbles: true }));
+        }
+      });
+    }
+    const allButton = panel.querySelector('#cmb-all');
+    const noneButton = panel.querySelector('#cmb-none');
+    if (allButton) allButton.onclick = function(){ setAll(true); };
+    if (noneButton) noneButton.onclick = function(){ setAll(false); };
+  }
+
+  new MutationObserver(enhanceSidebar).observe(content, { childList: true, subtree: true });
+  enhanceSidebar();
+})();
+</script>
+
 </body>
 </html>
