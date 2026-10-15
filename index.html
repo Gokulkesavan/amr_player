@@ -489,30 +489,33 @@ pre .cm{color:#72829a;font-style:italic}
 
 /* ---- AMR mode reference and stream-selection workspace ---- */
 .mode-reference{
-  padding:14px 16px;
-  margin-bottom:16px;
+  padding:12px 13px;
+  margin:0;
   border:1px solid var(--line);
-  border-radius:12px;
-  background:linear-gradient(180deg,rgba(17,26,38,.92),rgba(10,16,23,.92));
+  border-radius:10px;
+  background:linear-gradient(180deg,rgba(18,30,47,.95),rgba(12,18,26,.95));
 }
-.mode-reference-head{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.mode-reference-head{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
 .mode-reference-head h2{margin:0;font-size:13px;color:var(--text);letter-spacing:.02em}
-.mode-reference-note{margin:7px 0 12px;font-style:normal}
-.mode-reference-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
-.mode-reference-card{min-width:0;padding:10px 12px;border:1px solid var(--line);border-radius:9px;background:rgba(4,9,14,.38)}
-.mode-reference-card h3{display:flex;align-items:center;justify-content:space-between;gap:8px;margin:0 0 6px;font-size:12px}
+.mode-reference-note{margin:7px 0 10px;font-size:11px;line-height:1.5;font-style:normal}
+.mode-reference-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
+.mode-reference-card{min-width:0;padding:9px 10px;border:1px solid var(--line);border-radius:9px;background:rgba(4,9,14,.38)}
+.mode-reference-card h3{display:flex;align-items:center;justify-content:space-between;gap:6px;margin:0 0 6px;font-size:12px}
 .mode-reference-card h3 span{font-size:10px;color:var(--muted);font-family:var(--mono);font-weight:500}
-.mode-table{width:100%;border-collapse:collapse;font-size:11px;font-family:var(--mono)}
-.mode-table th,.mode-table td{padding:4px 7px;border-bottom:1px solid rgba(169,187,214,.08);text-align:left}
+.mode-table{width:100%;border-collapse:collapse;font-size:10.5px;font-family:var(--mono)}
+.mode-table th,.mode-table td{padding:4px 5px;border-bottom:1px solid rgba(169,187,214,.08);text-align:left}
 .mode-table th{color:var(--muted);font-family:inherit;font-weight:600}
 .mode-table td:last-child,.mode-table th:last-child{text-align:right}
 .mode-table tbody tr:last-child td{border-bottom:0}
-.mode-reference-foot{margin:10px 0 0;color:var(--muted);font-size:11px;line-height:1.5}
+.mode-reference-foot{margin:9px 0 0;color:var(--muted);font-size:10.5px;line-height:1.45}
 .mix-workspace{display:grid;grid-template-columns:minmax(245px,285px) minmax(0,1fr);gap:16px;align-items:start}
-.mix-sidebar-host{min-width:0;position:sticky;top:78px}
+.mix-sidebar-host{grid-column:1;grid-row:1;min-width:0;position:sticky;top:78px}
 .mix-sidebar-host:empty{display:none}
-.mix-sidebar-host:empty + .mix-main{grid-column:1 / -1}
-.mix-main{min-width:0}
+.mix-reference-host{grid-column:2;grid-row:1;min-width:0;position:sticky;top:78px}
+.mix-main{grid-column:1 / -1;grid-row:2;min-width:0}
+.mix-workspace.no-stream-selector{grid-template-columns:minmax(0,1fr)}
+.mix-workspace.no-stream-selector .mix-reference-host{grid-column:1;grid-row:1;position:static}
+.mix-workspace.no-stream-selector .mix-main{grid-column:1;grid-row:2}
 .cmb-panel.mix-sidebar-panel{padding:12px 13px;margin-bottom:14px}
 .cmb-panel.mix-sidebar-panel h3{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:8px;font-size:13px}
 .cmb-panel.mix-sidebar-panel .hint{line-height:1.5;margin:6px 0 10px}
@@ -532,8 +535,8 @@ pre .cm{color:#72829a;font-style:italic}
 @media(max-width:850px){
   .mode-reference-grid{grid-template-columns:1fr}
   .mix-workspace{grid-template-columns:minmax(0,1fr)}
-  .mix-sidebar-host{position:static}
-  .mix-sidebar-host:empty + .mix-main{grid-column:auto}
+  .mix-sidebar-host,.mix-reference-host{grid-column:1;grid-row:auto;position:static}
+  .mix-main,.mix-workspace.no-stream-selector .mix-main{grid-column:1;grid-row:auto}
   .mix-stream-list{max-height:280px}
 }
 
@@ -2282,6 +2285,8 @@ function render(fileName){
   let html = '';
 
 
+  html += '<div class="mix-workspace' + (amrN < 2 ? ' no-stream-selector' : '') + '"><aside id="mix-sidebar-host" class="mix-sidebar-host" aria-label="Stream selection"></aside><aside id="mix-reference-host" class="mix-reference-host" aria-label="AMR mode reference">';
+
   html += '<section class="mode-reference" aria-label="AMR codec mode reference">' +
     '<div class="mode-reference-head"><h2>AMR mode-set / bandwidth reference</h2>' +
     '<span class="tag info">Speech modes</span></div>' +
@@ -2306,8 +2311,9 @@ function render(fileName){
       '</div>' +
     '</div>' +
     '<p class="mode-reference-foot">Example: <code>mode-set=0,2,4</code> permits only those modes. SID and NO_DATA frame types are not speech bitrate modes.</p>' +
-  '</section>';
-  html += '<div class="mix-workspace"><aside id="mix-sidebar-host" class="mix-sidebar-host" aria-label="Stream selection"></aside><div class="mix-main">';
+  '</section></aside>';
+  html += '<div class="mix-main">';
+
   html += `<div class="summary">
     <div class="stat"><div class="l">RTP streams detected</div><div class="v">${rtpN}</div></div>
     <div class="stat"><div class="l">AMR streams</div><div class="v">${amrN}</div></div>
