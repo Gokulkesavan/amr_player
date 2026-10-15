@@ -534,6 +534,43 @@ pre .cm{color:#72829a;font-style:italic}
 .mix-sidebar-panel .actions #cmb-count{flex:1 1 100%}
 .mix-main .card h3 > .cmb-pick{display:none!important}
 .mix-main .cmb-result{max-width:100%;margin:0 0 16px}
+
+/* Prevent compact Mode & Alignment / Frame Breakdown rows from overlapping. */
+.panelbox .frow{
+  display:grid;
+  grid-template-columns:minmax(0,1fr) minmax(0,1fr);
+  column-gap:8px;
+  align-items:center;
+  min-width:0;
+}
+.panelbox .frow > .k{
+  min-width:0;
+  overflow-wrap:anywhere;
+  word-break:normal;
+}
+.panelbox .frow > .v{
+  min-width:0;
+  max-width:100%;
+  justify-self:stretch;
+  text-align:right;
+  overflow-wrap:anywhere;
+  word-break:break-word;
+  line-height:1.45;
+}
+.panelbox .frow > .v .tag.big{
+  display:inline-block;
+  max-width:100%;
+  box-sizing:border-box;
+  padding:4px 7px;
+  white-space:normal;
+  overflow-wrap:anywhere;
+  word-break:normal;
+  line-height:1.35;
+}
+.panelbox .frow > .v span{
+  overflow-wrap:anywhere;
+}
+
  
 /* ---- Wide-screen workspace: use available display width without stretching cards ---- */
 .mix-main > section{
