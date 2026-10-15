@@ -225,9 +225,10 @@ a.btn{text-decoration:none}
 @keyframes spin{to{transform:rotate(360deg)}}
 
 .container{
-  max-width:1100px;
+  width:100%;
+  max-width:1760px;
   margin:0 auto;
-  padding:22px 18px 40px;
+  padding:20px clamp(16px, 1.8vw, 30px) 40px;
 }
 
 .summary{
@@ -533,6 +534,28 @@ pre .cm{color:#72829a;font-style:italic}
 .mix-sidebar-panel .actions #cmb-count{flex:1 1 100%}
 .mix-main .card h3 > .cmb-pick{display:none!important}
 .mix-main .cmb-result{max-width:100%;margin:0 0 16px}
+ 
+/* ---- Wide-screen workspace: use available display width without stretching cards ---- */
+.mix-main > section{
+  display:grid;
+  grid-template-columns:repeat(auto-fit,minmax(min(100%,440px),1fr));
+  column-gap:12px;
+  align-items:start;
+}
+.mix-main > section > h2,
+.mix-main > section > .warnbox{
+  grid-column:1 / -1;
+}
+.mix-main > section > .card{
+  min-width:0;
+}
+@media(min-width:1450px){
+  .summary{gap:10px;margin-bottom:18px}
+  .stat{padding:11px 12px;border-radius:10px}
+  .card{padding:14px 15px;border-radius:11px}
+  section{margin-bottom:20px}
+}
+
 @media(max-width:1050px){
   .mix-workspace{grid-template-columns:minmax(225px,255px) minmax(0,1fr)}
   .mix-reference-host{grid-column:1 / -1;grid-row:1;position:static}
