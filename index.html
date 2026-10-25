@@ -2387,8 +2387,7 @@ function render(fileName){
   html += '<div class="mix-main">';
 
   html += `<div class="summary">
-    <div class="stat"><div class="l">RTP streams detected</div><div class="v">${rtpN}</div></div>
-    <div class="stat"><div class="l">AMR streams</div><div class="v">${amrN}</div></div>
+    <div class="stat"><div class="l">RTP / AMR streams</div><div class="v">${rtpN}/${amrN}</div></div>
     <div class="stat"><div class="l">Deduced from SDP</div><div class="v" style="color:#7ee2a0">${sdpGroup.length}</div></div>
     <div class="stat"><div class="l">No SDP (heuristic)</div><div class="v" style="color:#e5b955">${heuristicGroup.length}</div></div>
   </div>`;
@@ -2531,6 +2530,10 @@ function renderStreamCard(g, cls, i){
           <span class="v">${esc(cls.source)}</span></div>
         ${cls.modeSet ? `<div class="frow"><span class="k">mode-set</span>
           <span class="v">${esc(cls.modeSet)}</span></div>` : ''}
+        <div style="margin-top:8px;padding-top:7px;border-top:1px solid var(--border);font-size:12px;color:var(--muted)">
+          <b style="color:var(--text)">Mode evidence:</b><br>
+          ${cls.evidence.map(e => '- ' + esc(e)).join('<br>')}
+        </div>
       </div>
       <div class="panelbox">
         <h4>Frame breakdown (from RTP packets)</h4>
@@ -2553,10 +2556,6 @@ function renderStreamCard(g, cls, i){
       </div>
     </div>
 
-    <div style="margin-top:10px;font-size:12px;color:var(--muted)">
-      <b style="color:var(--text)">Mode evidence:</b><br>
-      ${cls.evidence.map(e => '· ' + esc(e)).join('<br>')}
-    </div>
   </div>`;
 }
 
@@ -2726,19 +2725,19 @@ async function convertToWav(g, cls, idx){
   rep.innerHTML = '';
   const status = document.createElement('div');
   status.className = 'infobox';
-  status.textContent = 'Building AMR file…';
+  status.textContent = 'Building AMR file-';
   rep.appendChild(status);
 
   try {
     const ext = cls.isWB ? 'awb' : 'amr';
 
-    /* Prefer genuine SID/comfort-noise frames — matches how a real
+    /* Prefer genuine SID/comfort-noise frames - matches how a real
        decoder (and Wireshark) would play the stream. Only fall back to
        NO_DATA substitution if the decoder can't handle the raw SID data. */
     let built = buildAMRFile(g.packets, cls.isWB, cls.octetAlign,
                               cls.frameSamples, { replaceSid: false });
 
-    status.textContent = 'Decoding (opencore-amr, in-browser)…';
+    status.textContent = 'Decoding (opencore-amr, in-browser)-';
     let decoded;
     try {
       decoded = await decodeAmrToPCM(built.bytes);
@@ -2748,7 +2747,7 @@ async function convertToWav(g, cls, idx){
       decoded = await decodeAmrToPCM(built.bytes);
     }
 
-    status.textContent = 'Encoding WAV…';
+    status.textContent = 'Encoding WAV-';
     const wavBytes = encodeWavPCM16(decoded.pcm, decoded.sampleRate);
     const wavBlob  = new Blob([wavBytes.buffer], { type: 'audio/wav' });
     const wavName  = `stream-${idx}-ssrc-${g.ssrc.toString(16)}.wav`;
@@ -2774,8 +2773,8 @@ async function convertToWav(g, cls, idx){
 
     status.outerHTML = `
       <div class="okbox">
-        <b>${esc(wavName)}</b> decoded — ${fmtBytes(wavBlob.size)}<br>
-        ${decoded.sampleRate} Hz · mono · ${fmtDur(durSec)}
+        <b>${esc(wavName)}</b> decoded - ${fmtBytes(wavBlob.size)}<br>
+        ${decoded.sampleRate} Hz - mono - ${fmtDur(durSec)}
       </div>`;
   } catch(e){
     console.error('AMR decode failed:', e);
