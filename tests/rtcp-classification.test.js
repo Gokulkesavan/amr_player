@@ -34,7 +34,7 @@ test('recognizes a valid RTCP Receiver Report', () => {
 
 test('recognizes compound RTCP packets', () => {
   const sr = rtcpHeader(200, 6);
-  const sdes = rtcpHeader(202, 1);
+  const sdes = rtcpHeader(202, 2, 1); // one SDES chunk, 12 bytes
   const compound = new Uint8Array(sr.length + sdes.length);
   compound.set(sr);
   compound.set(sdes, sr.length);
