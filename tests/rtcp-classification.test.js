@@ -49,7 +49,8 @@ test('does not classify ordinary RTP as RTCP', () => {
 });
 
 test('rejects truncated or internally inconsistent RTCP lengths', () => {
-  const truncated = rtcpHeader(201, 4); // claims 20 bytes, carries only 8
+  const truncated = rtcpHeader(201, 1); // carries 8 bytes but claims 20
+  truncated[3] = 4;
   assert.equal(isRTCPPacket(truncated), false);
 
   const undersizedSr = rtcpHeader(200, 1); // SR requires at least 28 bytes
