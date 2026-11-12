@@ -962,9 +962,65 @@ function decodeESP(d){
   return null;
 }
 
+/*
+ * RTCP and RTP both use protocol version 2. RTCP packet types occupy
+ * 192..223, which collide with RTP payload types 64..95 when the marker
+ * bit is set. Validate the complete RTCP packet/compound-packet length
+ * before allowing a datagram into the RTP/SSRC path.
+ */
+function isRTCPPacket(d){
+  if (!d || d.length < 4) return false;
+
+  let off = 0;
+  let packetCount = 0;
+  while (off < d.length){
+    if (d.length - off < 4) return false;
+
+    const b0 = d[off];
+    const version = b0 >> 6;
+    const padding = (b0 >> 5) & 1;
+    const count = b0 & 0x1F;
+    const packetType = d[off + 1];
+
+    if (version !== 2 || packetType < 192 || packetType > 223) return false;
+
+    const packetLength = (((d[off + 2] << 8) | d[off + 3]) + 1) * 4;
+    if (packetLength < 4 || off + packetLength > d.length) return false;
+
+    // Check the fixed portions and count-dependent report blocks for
+    // the common RTCP packet types. This reduces RTP/RTCP PT collisions.
+    if (packetType === 200 && packetLength < 28 + count * 24) return false; // SR
+    if (packetType === 201 && packetLength < 8 + count * 24) return false;  // RR
+    if (packetType === 202 && packetLength < 8) return false;               // SDES
+    if (packetType === 203 && packetLength < 4 + count * 4) return false;    // BYE
+    if ((packetType === 204 || packetType === 205 || packetType === 206) &&
+        packetLength < 12) return false;                                    // APP/feedback
+    if (packetType === 207 && packetLength < 8) return false;               // XR
+
+    let effectiveLength = packetLength;
+    if (padding){
+      // Padding is permitted only on the final packet in a compound packet.
+      if (off + packetLength !== d.length) return false;
+      const paddingLength = d[off + packetLength - 1];
+      if (paddingLength === 0 || paddingLength > packetLength - 4) return false;
+      effectiveLength -= paddingLength;
+    }
+
+    // SR/RR report blocks must fit before any optional padding.
+    if (packetType === 200 && effectiveLength < 28 + count * 24) return false;
+    if (packetType === 201 && effectiveLength < 8 + count * 24) return false;
+
+    off += packetLength;
+    packetCount++;
+  }
+
+  return packetCount > 0 && off === d.length;
+}
+
 function tryRTP(d){
   if (d.length < 12) return null;
   if ((d[0] >> 6) !== 2) return null;
+  if (isRTCPPacket(d)) return null;
   const pad = (d[0] >> 5) & 1, ext = (d[0] >> 4) & 1, cc = d[0] & 0x0F;
   const marker = (d[1] >> 7) & 1, pt = d[1] & 0x7F;
   const seq = (d[2] << 8) | d[3];
